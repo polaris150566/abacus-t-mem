@@ -11,18 +11,33 @@ log_dir/
 *.log
 *.out
 
-# Data files
-*.pkl
+# Model weights
 *.pt
 *.pth
 *.ckpt
+
+# Data files
+*.pkl
 *.npy
 *.npz
+*.fasta
+*.pdb
+*.fa
+*.faa
+*.fna
+*.sdf
+*.mol2
+*.pdbqt
+*.cif
+*.ent
+*.bin
 
 # Large directories
 src/experiments/
-src/data/
 src/scripts/
+src/data/data_storage/
+src/data/raw_data/
+src/data/tmAFDB_data/
 
 # IDE
 .idea/
