@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.eggs/
+*.egg
+
+# Logs and outputs
+log_dir/
+*.log
+*.out
+
+# Data files
+*.pkl
+*.pt
+*.pth
+*.ckpt
+*.npy
+*.npz
+
+# Large directories
+src/experiments/
+src/data/
+src/scripts/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

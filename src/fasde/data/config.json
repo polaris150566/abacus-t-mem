@@ -1,0 +1,459 @@
+{
+    "data": {
+        "train_mode": true,
+        "mmcif_dir": "/train14/superbrain/lhchen/data/PDB/20220102/mmcif/",
+        "obsolete_pdbs_path": "/yrfs1/hyperbrain/lhchen/data/alphafold2/databases/pdb_mmcif/obsolete.dat",
+        "kalign_binary_path": "/home/superbrain/lhchen/miniconda3_alphafold/bin/kalign",
+        "max_template_date": "2018-04-30",
+        "common": {
+            "masked_msa": {
+                "profile_prob": 0.1,
+                "same_prob": 0.1,
+                "uniform_prob": 0.1
+            },
+            "batch_size":1,
+            "max_extra_msa": 1024,
+            "max_msa_clusters": 128,
+            "max_residue_len": 256,
+            "msa_cluster_features": true,
+            "num_recycle": 3,
+            "reduce_msa_clusters_by_max_templates": true,
+            "resample_msa_in_recycling": true,
+            "template_features": [
+                "template_all_atom_positions",
+                "template_sum_probs",
+                "template_aatype",
+                "template_all_atom_masks",
+                "template_domain_names"
+            ],
+            "unsupervised_features": [
+                "aatype",
+                "residue_index",
+                "sequence",
+                "msa",
+                "domain_name",
+                "num_alignments",
+                "seq_length",
+                "between_segment_residues",
+                "deletion_matrix"
+            ],
+            "use_templates": true,
+            "fixed_size": false,
+            "subsample_templates": false,
+            "masked_msa_replace_fraction": 0.15,
+            "max_templates": 4,
+            "num_ensemble": 1,
+            "block_delete_msa": {
+                "num_blocks": 5,
+                "msa_fraction_per_block": 0.3,
+                "randomize_num_blocks": true
+            }
+        },
+        "feat": {
+            "aatype": ["NUM_RES"],
+            "all_atom_mask": ["NUM_RES", null],
+            "all_atom_positions": ["NUM_RES", null, null],
+            "alt_chi_angles": ["NUM_RES", null],
+            "atom14_alt_gt_exists": ["NUM_RES", null],
+            "atom14_alt_gt_positions": ["NUM_RES", null, null],
+            "atom14_atom_exists": ["NUM_RES", null],
+            "atom14_atom_is_ambiguous": ["NUM_RES", null],
+            "atom14_gt_exists": ["NUM_RES", null],
+            "atom14_gt_positions": ["NUM_RES", null, null],
+            "atom37_atom_exists": ["NUM_RES", null],
+            "backbone_affine_mask": ["NUM_RES"],
+            "backbone_affine_tensor": ["NUM_RES", null],
+            "bert_mask": ["NUM_MSA_SEQ", "NUM_RES"],
+            "chi_angles": ["NUM_RES", null],
+            "chi_mask": ["NUM_RES", null],
+            "extra_deletion_value": ["NUM_EXTRA_SEQ", "NUM_RES"],
+            "extra_has_deletion": ["NUM_EXTRA_SEQ", "NUM_RES"],
+            "extra_msa": ["NUM_EXTRA_SEQ", "NUM_RES"],
+            "extra_msa_mask": ["NUM_EXTRA_SEQ", "NUM_RES"],
+            "extra_msa_row_mask": ["NUM_EXTRA_SEQ"],
+            "is_distillation": [],
+            "msa_feat": ["NUM_MSA_SEQ", "NUM_RES", null],
+            "msa_mask": ["NUM_MSA_SEQ", "NUM_RES"],
+            "msa_row_mask": ["NUM_MSA_SEQ"],
+            "pseudo_beta": ["NUM_RES", null],
+            "pseudo_beta_mask": ["NUM_RES"],
+            "random_crop_to_size_seed": [null],
+            "residue_index": ["NUM_RES"],
+            "residx_atom14_to_atom37": ["NUM_RES", null],
+            "residx_atom37_to_atom14": ["NUM_RES", null],
+            "resolution": [],
+            "rigidgroups_alt_gt_frames": ["NUM_RES", null, null],
+            "rigidgroups_group_exists": ["NUM_RES", null],
+            "rigidgroups_group_is_ambiguous": ["NUM_RES", null],
+            "rigidgroups_gt_exists": ["NUM_RES", null],
+            "rigidgroups_gt_frames": ["NUM_RES", null, null],
+            "seq_length": [],
+            "seq_mask": ["NUM_RES"],
+            "target_feat": ["NUM_RES", null],
+            "template_aatype": ["NUM_TEMPLATES", "NUM_RES"],
+            "template_all_atom_masks": ["NUM_TEMPLATES", "NUM_RES", null],
+            "template_all_atom_positions": [
+                "NUM_TEMPLATES", "NUM_RES", null, null],
+            "template_backbone_affine_mask": ["NUM_TEMPLATES", "NUM_RES"],
+            "template_backbone_affine_tensor": [
+                "NUM_TEMPLATES", "NUM_RES", null],
+            "template_mask": ["NUM_TEMPLATES"],
+            "template_pseudo_beta": ["NUM_TEMPLATES", "NUM_RES", null],
+            "template_pseudo_beta_mask": ["NUM_TEMPLATES", "NUM_RES"],
+            "template_sum_probs": ["NUM_TEMPLATES", null],
+            "true_msa": ["NUM_MSA_SEQ", "NUM_RES"]
+        },
+        "_eval": {
+            "fixed_size": false,
+            "subsample_templates": false,
+            "masked_msa_replace_fraction": 0.15,
+            "max_msa_clusters": 512,
+            "max_templates": 4,
+            "num_ensemble": 1
+        }
+    },
+    "model": {
+        "embeddings_and_evoformer": {
+            "evoformer_num_block": 48,
+            "evo_former_checkpoint":48,
+            "evoformer": {
+                "msa_row_attention_with_pair_bias": {
+                    "dropout_rate": 0.15,
+                    "gating": true,
+                    "num_head": 8,
+                    "orientation": "per_row",
+                    "shared_dropout": true
+                },
+                "msa_column_attention": {
+                    "dropout_rate": 0.0,
+                    "gating": true,
+                    "num_head": 8,
+                    "orientation": "per_column",
+                    "shared_dropout": true
+                },
+                "msa_transition": {
+                    "dropout_rate": 0.0,
+                    "num_intermediate_factor": 4,
+                    "orientation": "per_row",
+                    "shared_dropout": true
+                },
+                "outer_product_mean": {
+                    "first": false,
+                    "chunk_size": 128,
+                    "dropout_rate": 0.0,
+                    "num_outer_channel": 32,
+                    "orientation": "per_row",
+                    "shared_dropout": true
+                },
+                "triangle_attention_starting_node": {
+                    "dropout_rate": 0.25,
+                    "gating": true,
+                    "num_head": 4,
+                    "orientation": "per_row",
+                    "shared_dropout": true
+                },
+                "triangle_attention_ending_node": {
+                    "dropout_rate": 0.25,
+                    "gating": true,
+                    "num_head": 4,
+                    "orientation": "per_column",
+                    "shared_dropout": true
+                },
+                "triangle_multiplication_outgoing": {
+                    "dropout_rate": 0.25,
+                    "equation": "...ikc,...jkc->...ijc",
+                    "outgoing":true,
+                    "num_intermediate_channel": 128,
+                    "orientation": "per_row",
+                    "shared_dropout": true
+                },
+                "triangle_multiplication_incoming": {
+                    "dropout_rate": 0.25,
+                    "equation": "...kjc,...kic->...ijc",
+                    "outgoing":false,
+                    "num_intermediate_channel": 128,
+                    "orientation": "per_row",
+                    "shared_dropout": true
+                },
+                "pair_transition": {
+                    "dropout_rate": 0.0,
+                    "num_intermediate_factor": 4,
+                    "orientation": "per_row",
+                    "shared_dropout": true
+                }
+            },
+            "extra_msa_channel": 64,
+            "extra_msa_feat_dim": 25,
+            "extra_msa_stack_num_block": 4,
+            "extra_msa_checkpoint": 36,
+            "max_relative_feature": 32,
+            "msa_channel": 256,
+            "pair_channel": 128,
+            "target_feat_dim": 22,
+            "msa_feat_dim": 49,
+            "template_feat_dim": 57,
+            "prev_pos": {
+                "min_bin": 3.25,
+                "max_bin": 20.75,
+                "num_bins": 15
+            },
+            "recycle_features": true,
+            "recycle_pos": true,
+            "seq_channel": 384,
+            "template": {
+                "attention": {
+                    "gating": false,
+                    "key_dim": 64,
+                    "num_head": 4,
+                    "value_dim": 64
+                },
+                "dgram_features": {
+                    "min_bin": 3.25,
+                    "max_bin": 50.75,
+                    "num_bins": 39
+                },
+                "embed_torsion_angles": true,
+                "enabled": true,
+                "template_pair_stack": {
+                    "num_block": 2,
+                    "checkpoint":2,
+                    "dropout_rate": 0.25,
+                    "triangle_attention_starting_node": {
+                        "dropout_rate": 0.25,
+                        "gating": true,
+                        "key_dim": 64,
+                        "num_head": 4,
+                        "orientation": "per_row",
+                        "shared_dropout": true,
+                        "value_dim": 64
+                    },
+                    "triangle_attention_ending_node": {
+                        "dropout_rate": 0.25,
+                        "gating": true,
+                        "key_dim": 64,
+                        "num_head": 4,
+                        "orientation": "per_column",
+                        "shared_dropout": true,
+                        "value_dim": 64
+                    },
+                    "triangle_multiplication_outgoing": {
+                        "dropout_rate": 0.25,
+                        "equation": "...ikc,...jkc->...ijc",
+                        "outgoing":true,
+                        "num_intermediate_channel": 64,
+                        "orientation": "per_row",
+                        "shared_dropout": true
+                    },
+                    "triangle_multiplication_incoming": {
+                        "dropout_rate": 0.25,
+                        "equation": "...kjc,...kic->...ijc",
+                        "outgoing":false,
+                        "num_intermediate_channel": 64,
+                        "orientation": "per_row",
+                        "shared_dropout": true
+                    },
+                    "pair_transition": {
+                        "dropout_rate": 0.0,
+                        "num_intermediate_factor": 2,
+                        "orientation": "per_row",
+                        "shared_dropout": true
+                    }
+                },
+                "max_templates": 4,
+                "subbatch_size": 128,
+                "template_dgrame_dim": 39,
+                "template_aatype_dim": 22,
+                "use_template_unit_vector": false
+            }
+        },
+        "global_config": {
+            "deterministic": false,
+            "multimer_mode": false,
+            "subbatch_size": 1024,
+            "use_remat": false,
+            "zero_init": true,
+            "use_checkpoint":true,
+            "is_inference":false
+        },
+        "heads": {
+            "distogram": {
+                "first_break": 2.3125,
+                "last_break": 21.6875,
+                "num_bins": 64,
+                "weight": 0.3
+            },
+            "predicted_aligned_error": {
+                "max_error_bin": 31.0,
+                "num_bins": 64,
+                "num_channels": 128,
+                "filter_by_resolution": true,
+                "min_resolution": 0.1,
+                "max_resolution": 3.0,
+                "weight": 0.0
+            },
+            "experimentally_resolved": {
+                "filter_by_resolution": true,
+                "max_resolution": 3.0,
+                "min_resolution": 0.1,
+                "weight": 0.0
+            },
+            "structure_module": {
+                "num_layer": 8,
+                "fape": {
+                    "clamp_distance": 10.0,
+                    "clamp_type": "relu",
+                    "loss_unit_distance": 10.0,
+                    "use_unclamp":true,
+                    "clamp_weight": 0.9,
+                    "traj_weight": 0.5
+                },
+                "angle_norm_weight": 0.01,
+                "chi_weight": 0.5,
+                "clash_overlap_tolerance": 1.5,
+                "compute_in_graph_metrics": true,
+                "dropout": 0.1,
+                "num_channel": 384,
+                "num_head": 12,
+                "num_layer_in_transition": 3,
+                "num_point_qk": 4,
+                "num_point_v": 8,
+                "num_scalar_qk": 16,
+                "num_scalar_v": 16,
+                "position_scale": 10.0,
+                "sidechain": {
+                    "atom_clamp_distance": 10.0,
+                    "num_channel": 128,
+                    "num_residual_block": 2,
+                    "weight_frac": 0.9,
+                    "length_scale": 10.0
+                },
+                "structural_violation_loss_weight": 0.0,
+                "violation_tolerance_factor": 12.0,
+                "weight": 1.0
+            },
+            "predicted_lddt": {
+                "filter_by_resolution": true,
+                "max_resolution": 3.0,
+                "min_resolution": 0.1,
+                "num_bins": 50,
+                "num_channels": 128,
+                "weight": 0.01
+            },
+            "masked_msa": {
+                "num_output": 23,
+                "weight": 2.0
+            }
+        },
+        "max_num_recycle": 4,
+        "num_ensemble":1,
+        "_num_recycle": 3,
+        "resample_msa_in_recycling": true
+    },
+    "evoformer":{
+        "layers_2d": 3,
+        "evoformer_checkpoint": 8,
+        "evoformer_block": {
+            "msa_row_attention_with_pair_bias": {
+                "dropout_rate": 0.15,
+                "gating": true,
+                "num_head": 8,
+                "orientation": "per_row",
+                "shared_dropout": true
+            },
+            "msa_transition": {
+                "dropout_rate": 0.0,
+                "num_intermediate_factor": 4,
+                "orientation": "per_row",
+                "shared_dropout": true
+            },
+            "outer_product_mean": {
+                "first": false,
+                "chunk_size": 128,
+                "dropout_rate": 0.0,
+                "num_outer_channel": 32,
+                "orientation": "per_row",
+                "shared_dropout": true
+            },
+            "triangle_attention_starting_node": {
+                "dropout_rate": 0.25,
+                "gating": true,
+                "num_head": 4,
+                "orientation": "per_row",
+                "shared_dropout": true,
+                "out_single": false
+            },
+            "triangle_attention_ending_node": {
+                "dropout_rate": 0.25,
+                "gating": true,
+                "num_head": 4,
+                "orientation": "per_column",
+                "shared_dropout": true,
+                "out_single": false
+            },
+            "triangle_multiplication_outgoing": {
+                "dropout_rate": 0.25,
+                "equation": "...ikc,...jkc->...ijc",
+                "outgoing":true,
+                "num_intermediate_channel": 256,
+                "orientation": "per_row",
+                "shared_dropout": true
+            },
+            "triangle_multiplication_incoming": {
+                "dropout_rate": 0.25,
+                "equation": "...kjc,...kic->...ijc",
+                "outgoing":false,
+                "num_intermediate_channel": 256,
+                "orientation": "per_row",
+                "shared_dropout": true
+            },
+            "pair_transition": {
+                "dropout_rate": 0.0,
+                "num_intermediate_factor": 4,
+                "orientation": "per_row",
+                "shared_dropout": true
+            } 
+        }
+    },
+    "train": {
+        "data_type": "npz_list",
+        "train_list2": "/yrfs1/hyperbrain/lhchen/protein/Alphafold2/alphafold_train/list/train_list.txt",
+        "eval_list2": "/yrfs1/hyperbrain/lhchen/protein/Alphafold2/alphafold_train/list/eval_list.txt",
+        "train_list": "/raw22/superbrain/permanent/lhchen/data/alphafold2/processed_data/colabfold_search_result/full_chain/train_crop-256_20000000_validatoms-0.8.csv",
+        "eval_list": "/raw22/superbrain/permanent/lhchen//data/alphafold2/processed_data/colabfold_search_result/full_chain/eval_crop-256_5000_validatoms-0.8.csv",
+        "msa_dir": "/raw22/superbrain/permanent/lhchen//data/alphafold2/processed_data/colabfold_search_result/full_chain/uniq_split_500_len1000_split",
+        "max_train_date": "2018-04-30",
+        "crop_seq_msa": false,
+        "min_seq_len": 10,
+        "max_seq_len": 9999,
+        "min_resolution": 0.0,
+        "max_resolution": 9.0,
+        "max_cluster_size": 20,
+        "unclamp_prob": 0.1,
+        "min_msa_size": 10,
+        "weight_decay": 0.0,
+        "init_lr": 0.00001,
+        "lr": 0.001,
+        "fp16":false,
+        "bfp16":true,
+        "warmup": {
+            "init_value": 0.000001,
+            "peak_value": 0.001,
+            "warmup_steps": 1000,
+            "transition_steps": 50000,
+            "decay_rate":0.95,
+            "transition_begin": 49000
+        },
+        "betas": [0.9, 0.999],
+        "num_steps": 100000,
+        "num_train_samples": 12800000,
+        "num_eval_samples": 100,
+        "eval_every": 100,
+        "checkpoint_every": 100,
+        "grad_clip_thresh": 0.1,
+        "log_every": 1,
+        "update_every": 4,
+        "no_ema":false,
+        "ema_decay":0.999,
+        "start_loss_scale":32
+    }
+}

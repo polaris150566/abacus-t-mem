@@ -1,0 +1,294 @@
+import logging
+from pathlib import Path
+import re
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from fairseq import utils
+from fairseq.models import (
+    BaseFairseqModel,
+    register_model,
+    register_model_architecture,
+)
+from fairseq.utils import safe_hasattr
+from ..modules.gvp_modules.gvp_transformer import GVPTransformerModel
+from ..modules import Alphabet
+
+logger = logging.getLogger(__name__)
+
+
+@register_model("diff_full_atom")
+class DiffFullAtom(BaseFairseqModel):
+    @staticmethod
+    def add_args(parser):
+        parser.add_argument("--gvp-arch", type=str) # 'vt_medium_with_invariant_gvp'
+        parser.add_argument("--target-shuffle-ratio", type=float)
+        parser.add_argument("--nar", action='store_true', default=False)
+        parser.add_argument("--lig_neighbor_seq_mask", action='store_true', default=False)
+        parser.add_argument("--ligmpnn_init", action='store_true', default=False)
+        parser.add_argument("--esm_embedder", action='store_true', default=False)
+        parser.add_argument("--max_iter_num", default=4, type=int)
+        parser.add_argument("--pre_prot_mode", default='proteinMPNN', type=str) # pifold, proteinMPNN
+        parser.add_argument("--merge_mpnn_enc_layer_num", default=3, type=int)
+        parser.add_argument("--merge_mpnn_dec_layer_num", default=7, type=int)
+        parser.add_argument("--freeze_encoder_param", action='store_true', default=False)
+        parser.add_argument("--pretrained_mpnn_ckpt", action='store_true', default=False)
+        parser.add_argument("--pretrained_mpnn_ckpt_f", type=str, default='')
+        parser.add_argument("--encode_mpnn", action='store_true', default=False)
+        parser.add_argument("--augment_eps", default=0.2, type=float)
+        parser.add_argument("--diff_T", default=40, type=int)
+        parser.add_argument("--pretrain", default=None, type=str)
+
+    def __init__(self, args):
+        super().__init__()
+        self._num_updates = 0
+
+        alphabet = Alphabet.from_architecture(args.gvp_arch)
+        self.model = GVPTransformerModel(
+            args, alphabet
+        )
+
+        pretrain = getattr(args, 'pretrain', None)
+        if pretrain is not None:
+            ckpt = torch.load(args.pretrain, map_location='cpu')
+            state_dict = {re.sub(r'^model\.', '', k): v for k, v in ckpt['model'].items()}
+            self.model.load_state_dict(state_dict, strict=False)
+            logger.info(f'loaded pretrain ckpt: {pretrain}')
+
+
+    @classmethod
+    def build_model(cls, args, task):
+        base_architecture(args)
+        return cls(args)
+
+    def forward(self, batch):
+        output = self.model(
+            batch,
+        )
+        return output
+
+    def set_num_updates(self, num_updates):
+        super().set_num_updates(num_updates)
+        self._num_updates = num_updates
+
+
+@register_model_architecture("diff_full_atom", "diff_full_atom_base")
+def base_architecture(args):
+    args.gvp_arch = getattr(args, "gvp_arch", "vt_medium_with_invariant_gvp")
+
+    # decoder 
+    args.decoder_attention_heads = getattr(args, "decoder_attention_heads", 6)
+    args.decoder_embed_dim = getattr(args, "decoder_embed_dim", 384)
+    args.decoder_embed_path = getattr(args, "decoder_embed_path", None)
+    args.decoder_ffn_embed_dim = getattr(args, "decoder_ffn_embed_dim", 1536)
+    args.decoder_input_dim = getattr(args, "decoder_input_dim", 384)
+    args.decoder_layerdrop = getattr(args, "decoder_layerdrop", 0)
+    args.decoder_layers = getattr(args, "decoder_layers", 8)
+    args.decoder_layers_to_keep = getattr(args, "decoder_layers_to_keep", None)
+    args.decoder_learned_pos = getattr(args, "decoder_learned_pos", False)
+    args.decoder_normalize_before = getattr(args, "decoder_normalize_before", True)
+    args.decoder_output_dim = getattr(args, "decoder_output_dim", 384)
+    args.dropout = getattr(args, "dropout", 0.1)
+    args.attention_dropout = getattr(args, "attention_dropout", 0.1)
+    args.edge_attn_distance_cutoff = getattr(args, "edge_attn_distance_cutoff", -1)
+    args.edge_embed_dim = getattr(args, "edge_embed_dim", 0)
+    args.embed_edge_vectors = getattr(args, "embed_edge_vectors", False)
+    args.embed_features_in_global_frame = getattr(args, "embed_features_in_global_frame", False)
+    args.embed_features_in_local_frame = getattr(args, "embed_features_in_local_frame", True)
+    args.embed_gvp_in_global_frame = getattr(args, "embed_gvp_in_global_frame", False)
+    args.embed_gvp_in_local_frame = getattr(args, "embed_gvp_in_local_frame", True)
+    args.embed_ingraham_features = getattr(args, "embed_ingraham_features", True)
+    args.embed_patch_layers = getattr(args, "embed_patch_layers", 0)
+    args.embed_rotation_frames = getattr(args, "embed_rotation_frames", False)
+    args.embed_rotation_quaternions = getattr(args, "embed_rotation_quaternions", False)
+    args.embed_scores = getattr(args, "embed_scores", True)
+    args.empty_cache_freq = getattr(args, "empty_cache_freq", 0)
+
+
+    args.encoder_attention_heads = getattr(args, "encoder_attention_heads", 6)
+    args.encoder_edge_attn_layers = getattr(args, "encoder_edge_attn_layers", 0)
+    args.encoder_embed_dim = getattr(args, "encoder_embed_dim", 384)
+    args.encoder_embed_path = getattr(args, "encoder_embed_path", None)
+    args.encoder_ffn_embed_dim = getattr(args, "encoder_ffn_embed_dim", 1536)
+    args.encoder_layerdrop = getattr(args, "encoder_layerdrop", 0)
+    args.encoder_layers = getattr(args, "encoder_layers", 8)
+    args.encoder_layers_to_keep = getattr(args, "encoder_layers_to_keep", None)
+    args.encoder_learned_pos = getattr(args, "encoder_learned_pos", False)
+    args.encoder_normalize_before = getattr(args, "encoder_normalize_before", True)
+    args.equivariant_attn_layers = getattr(args, "equivariant_attn_layers", 0)
+    args.et_gvp_as_feedforward = getattr(args, "et_gvp_as_feedforward", False)
+
+
+    args.gvp_attention_heads = getattr(args, "gvp_attention_heads", 0)
+    args.gvp_conditioning_encoder = getattr(args, "gvp_conditioning_encoder", True)
+    args.gvp_conditioning_score_num_rbf = getattr(args, "gvp_conditioning_score_num_rbf", 16)
+    args.gvp_conv_no_scalar_activation = getattr(args, "gvp_conv_no_scalar_activation", False)
+    args.gvp_conv_no_vector_activation = getattr(args, "gvp_conv_no_vector_activation", False)
+    args.gvp_distance_noise = getattr(args, "gvp_distance_noise", 0.0)
+    args.gvp_dropout = getattr(args, "gvp_dropout", 0.1)
+    args.gvp_edge_hidden_dim_scalar = getattr(args, "gvp_edge_hidden_dim_scalar", 32)
+    args.gvp_edge_hidden_dim_vector = getattr(args, "gvp_edge_hidden_dim_vector", 1)
+    args.gvp_edge_input_dim_scalar = getattr(args, "gvp_edge_input_dim_scalar", 34)
+    args.gvp_edge_input_dim_vector = getattr(args, "gvp_edge_input_dim_vector", 1)
+    args.gvp_eps = getattr(args, "gvp_eps", 0.0001)
+    args.gvp_ignore_edges_without_coords = getattr(args, "gvp_ignore_edges_without_coords", True)
+    args.gvp_layernorm = getattr(args, "gvp_layernorm", True)
+    args.gvp_n_edge_gvps = getattr(args, "gvp_n_edge_gvps", 0)
+    args.gvp_n_edge_gvps_first_layer = getattr(args, "gvp_n_edge_gvps_first_layer", 0)
+    args.gvp_n_message_gvps = getattr(args, "gvp_n_message_gvps", 3)
+    args.gvp_no_edge_orientation = getattr(args, "gvp_no_edge_orientation", False)
+    args.gvp_node_hidden_dim_scalar = getattr(args, "gvp_node_hidden_dim_scalar", 1024)
+    args.gvp_node_hidden_dim_vector = getattr(args, "gvp_node_hidden_dim_vector", 256)
+    args.gvp_node_input_dim_scalar = getattr(args, "gvp_node_input_dim_scalar", 7)
+    args.gvp_node_input_dim_vector = getattr(args, "gvp_node_input_dim_vector", 3)
+    args.gvp_num_encoder_layers = getattr(args, "gvp_num_encoder_layers", 4)
+    args.gvp_top_k_neighbors = getattr(args, "gvp_top_k_neighbors", 10)
+    args.gvp_vector_gate = getattr(args, "gvp_vector_gate", True)
+
+
+@register_model_architecture("diff_full_atom", "diff_full_atom_small")
+def base_architecture(args):
+    args.decoder_attention_heads = getattr(args, "decoder_attention_heads", 4)
+    args.decoder_embed_dim = getattr(args, "decoder_embed_dim", 256)
+    args.decoder_embed_path = getattr(args, "decoder_embed_path", None)
+    args.decoder_ffn_embed_dim = getattr(args, "decoder_ffn_embed_dim", 1024)
+    args.decoder_input_dim = getattr(args, "decoder_input_dim", 256)
+    args.decoder_layerdrop = getattr(args, "decoder_layerdrop", 0)
+    args.decoder_layers = getattr(args, "decoder_layers", 3)
+    args.decoder_layers_to_keep = getattr(args, "decoder_layers_to_keep", None)
+    args.decoder_learned_pos = getattr(args, "decoder_learned_pos", False)
+    args.decoder_normalize_before = getattr(args, "decoder_normalize_before", True)
+    args.decoder_output_dim = getattr(args, "decoder_output_dim", 128)
+    args.dropout = getattr(args, "dropout", 0.1)
+    args.attention_dropout = getattr(args, "attention_dropout", 0.1)
+    args.edge_attn_distance_cutoff = getattr(args, "edge_attn_distance_cutoff", -1)
+    args.edge_embed_dim = getattr(args, "edge_embed_dim", 0)
+    args.embed_edge_vectors = getattr(args, "embed_edge_vectors", False)
+    args.embed_features_in_global_frame = getattr(args, "embed_features_in_global_frame", False)
+    args.embed_features_in_local_frame = getattr(args, "embed_features_in_local_frame", True)
+    args.embed_gvp_in_global_frame = getattr(args, "embed_gvp_in_global_frame", False)
+    args.embed_gvp_in_local_frame = getattr(args, "embed_gvp_in_local_frame", True)
+    args.embed_ingraham_features = getattr(args, "embed_ingraham_features", True)
+    args.embed_patch_layers = getattr(args, "embed_patch_layers", 0)
+    args.embed_rotation_frames = getattr(args, "embed_rotation_frames", False)
+    args.embed_rotation_quaternions = getattr(args, "embed_rotation_quaternions", False)
+    args.embed_scores = getattr(args, "embed_scores", True)
+    args.empty_cache_freq = getattr(args, "empty_cache_freq", 0)
+
+
+    args.encoder_attention_heads = getattr(args, "encoder_attention_heads", 4)
+    args.encoder_edge_attn_layers = getattr(args, "encoder_edge_attn_layers", 0)
+    args.encoder_embed_dim = getattr(args, "encoder_embed_dim", 128)
+    args.encoder_embed_path = getattr(args, "encoder_embed_path", None)
+    args.encoder_ffn_embed_dim = getattr(args, "encoder_ffn_embed_dim", 1024)
+    args.encoder_layerdrop = getattr(args, "encoder_layerdrop", 0)
+    args.encoder_layers = getattr(args, "encoder_layers", 3)
+    args.encoder_layers_to_keep = getattr(args, "encoder_layers_to_keep", None)
+    args.encoder_learned_pos = getattr(args, "encoder_learned_pos", False)
+    args.encoder_normalize_before = getattr(args, "encoder_normalize_before", True)
+    args.equivariant_attn_layers = getattr(args, "equivariant_attn_layers", 0)
+    args.et_gvp_as_feedforward = getattr(args, "et_gvp_as_feedforward", False)
+
+
+    args.gvp_attention_heads = getattr(args, "gvp_attention_heads", 0)
+    args.gvp_conditioning_encoder = getattr(args, "gvp_conditioning_encoder", True)
+    args.gvp_conditioning_score_num_rbf = getattr(args, "gvp_conditioning_score_num_rbf", 16)
+    args.gvp_conv_no_scalar_activation = getattr(args, "gvp_conv_no_scalar_activation", False)
+    args.gvp_conv_no_vector_activation = getattr(args, "gvp_conv_no_vector_activation", False)
+    args.gvp_distance_noise = getattr(args, "gvp_distance_noise", 0.0)
+    args.gvp_dropout = getattr(args, "gvp_dropout", 0.1)
+    args.gvp_edge_hidden_dim_scalar = getattr(args, "gvp_edge_hidden_dim_scalar", 32)
+    args.gvp_edge_hidden_dim_vector = getattr(args, "gvp_edge_hidden_dim_vector", 1)
+    args.gvp_edge_input_dim_scalar = getattr(args, "gvp_edge_input_dim_scalar", 34)
+    args.gvp_edge_input_dim_vector = getattr(args, "gvp_edge_input_dim_vector", 1)
+    args.gvp_eps = getattr(args, "gvp_eps", 0.0001)
+    args.gvp_ignore_edges_without_coords = getattr(args, "gvp_ignore_edges_without_coords", True)
+    args.gvp_layernorm = getattr(args, "gvp_layernorm", True)
+    args.gvp_n_edge_gvps = getattr(args, "gvp_n_edge_gvps", 0)
+    args.gvp_n_edge_gvps_first_layer = getattr(args, "gvp_n_edge_gvps_first_layer", 0)
+    args.gvp_n_message_gvps = getattr(args, "gvp_n_message_gvps", 3)
+    args.gvp_no_edge_orientation = getattr(args, "gvp_no_edge_orientation", False)
+    args.gvp_node_hidden_dim_scalar = getattr(args, "gvp_node_hidden_dim_scalar", 128)
+    args.gvp_node_hidden_dim_vector = getattr(args, "gvp_node_hidden_dim_vector", 64)
+    args.gvp_node_input_dim_scalar = getattr(args, "gvp_node_input_dim_scalar", 7)
+    args.gvp_node_input_dim_vector = getattr(args, "gvp_node_input_dim_vector", 3)
+    args.gvp_num_encoder_layers = getattr(args, "gvp_num_encoder_layers", 6)
+    args.gvp_top_k_neighbors = getattr(args, "gvp_top_k_neighbors", 30)
+    args.gvp_vector_gate = getattr(args, "gvp_vector_gate", True)
+
+
+
+
+@register_model_architecture("diff_full_atom", "diff_full_atom_tiny")
+def base_architecture(args):
+    args.gvp_arch = getattr(args, "gvp_arch", "vt_medium_with_invariant_gvp")
+    # decoder 
+    args.decoder_attention_heads = getattr(args, "decoder_attention_heads", 4)
+    args.decoder_embed_dim = getattr(args, "decoder_embed_dim", 256)
+    args.decoder_embed_path = getattr(args, "decoder_embed_path", None)
+    args.decoder_ffn_embed_dim = getattr(args, "decoder_ffn_embed_dim", 1024)
+    args.decoder_input_dim = getattr(args, "decoder_input_dim", 256)
+    args.decoder_layerdrop = getattr(args, "decoder_layerdrop", 0)
+    args.decoder_layers = getattr(args, "decoder_layers", 3)
+    args.decoder_layers_to_keep = getattr(args, "decoder_layers_to_keep", None)
+    args.decoder_learned_pos = getattr(args, "decoder_learned_pos", False)
+    args.decoder_normalize_before = getattr(args, "decoder_normalize_before", True)
+    args.decoder_output_dim = getattr(args, "decoder_output_dim", 128)
+    args.dropout = getattr(args, "dropout", 0.1)
+    args.attention_dropout = getattr(args, "attention_dropout", 0.1)
+    args.edge_attn_distance_cutoff = getattr(args, "edge_attn_distance_cutoff", -1)
+    args.edge_embed_dim = getattr(args, "edge_embed_dim", 0)
+    args.embed_edge_vectors = getattr(args, "embed_edge_vectors", False)
+    args.embed_features_in_global_frame = getattr(args, "embed_features_in_global_frame", False)
+    args.embed_features_in_local_frame = getattr(args, "embed_features_in_local_frame", True)
+    args.embed_gvp_in_global_frame = getattr(args, "embed_gvp_in_global_frame", False)
+    args.embed_gvp_in_local_frame = getattr(args, "embed_gvp_in_local_frame", True)
+    args.embed_ingraham_features = getattr(args, "embed_ingraham_features", True)
+    args.embed_patch_layers = getattr(args, "embed_patch_layers", 0)
+    args.embed_rotation_frames = getattr(args, "embed_rotation_frames", False)
+    args.embed_rotation_quaternions = getattr(args, "embed_rotation_quaternions", False)
+    args.embed_scores = getattr(args, "embed_scores", True)
+    args.empty_cache_freq = getattr(args, "empty_cache_freq", 0)
+
+
+    args.encoder_attention_heads = getattr(args, "encoder_attention_heads", 4)
+    args.encoder_edge_attn_layers = getattr(args, "encoder_edge_attn_layers", 0)
+    args.encoder_embed_dim = getattr(args, "encoder_embed_dim", 128)
+    args.encoder_embed_path = getattr(args, "encoder_embed_path", None)
+    args.encoder_ffn_embed_dim = getattr(args, "encoder_ffn_embed_dim", 1024)
+    args.encoder_layerdrop = getattr(args, "encoder_layerdrop", 0)
+    args.encoder_layers = getattr(args, "encoder_layers", 3)
+    args.encoder_layers_to_keep = getattr(args, "encoder_layers_to_keep", None)
+    args.encoder_learned_pos = getattr(args, "encoder_learned_pos", False)
+    args.encoder_normalize_before = getattr(args, "encoder_normalize_before", True)
+    args.equivariant_attn_layers = getattr(args, "equivariant_attn_layers", 0)
+    args.et_gvp_as_feedforward = getattr(args, "et_gvp_as_feedforward", False)
+
+
+    args.gvp_attention_heads = getattr(args, "gvp_attention_heads", 0)
+    args.gvp_conditioning_encoder = getattr(args, "gvp_conditioning_encoder", True)
+    args.gvp_conditioning_score_num_rbf = getattr(args, "gvp_conditioning_score_num_rbf", 16)
+    args.gvp_conv_no_scalar_activation = getattr(args, "gvp_conv_no_scalar_activation", False)
+    args.gvp_conv_no_vector_activation = getattr(args, "gvp_conv_no_vector_activation", False)
+    args.gvp_distance_noise = getattr(args, "gvp_distance_noise", 0.0)
+    args.gvp_dropout = getattr(args, "gvp_dropout", 0.1)
+    args.gvp_edge_hidden_dim_scalar = getattr(args, "gvp_edge_hidden_dim_scalar", 32)
+    args.gvp_edge_hidden_dim_vector = getattr(args, "gvp_edge_hidden_dim_vector", 1)
+    args.gvp_edge_input_dim_scalar = getattr(args, "gvp_edge_input_dim_scalar", 34)
+    args.gvp_edge_input_dim_vector = getattr(args, "gvp_edge_input_dim_vector", 1)
+    args.gvp_eps = getattr(args, "gvp_eps", 0.0001)
+    args.gvp_ignore_edges_without_coords = getattr(args, "gvp_ignore_edges_without_coords", True)
+    args.gvp_layernorm = getattr(args, "gvp_layernorm", True)
+    args.gvp_n_edge_gvps = getattr(args, "gvp_n_edge_gvps", 0)
+    args.gvp_n_edge_gvps_first_layer = getattr(args, "gvp_n_edge_gvps_first_layer", 0)
+    args.gvp_n_message_gvps = getattr(args, "gvp_n_message_gvps", 3)
+    args.gvp_no_edge_orientation = getattr(args, "gvp_no_edge_orientation", False)
+    args.gvp_node_hidden_dim_scalar = getattr(args, "gvp_node_hidden_dim_scalar", 128)
+    args.gvp_node_hidden_dim_vector = getattr(args, "gvp_node_hidden_dim_vector", 64)
+    args.gvp_node_input_dim_scalar = getattr(args, "gvp_node_input_dim_scalar", 7)
+    args.gvp_node_input_dim_vector = getattr(args, "gvp_node_input_dim_vector", 3)
+    args.gvp_num_encoder_layers = getattr(args, "gvp_num_encoder_layers", 4)
+    args.gvp_top_k_neighbors = getattr(args, "gvp_top_k_neighbors", 20)
+    args.gvp_vector_gate = getattr(args, "gvp_vector_gate", True)
+
