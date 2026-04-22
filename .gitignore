@@ -20,19 +20,25 @@ log_dir/
 *.pkl
 *.npy
 *.npz
-*.fasta
+*.bin
+
+# Protein/Structure files
 *.pdb
-*.fa
-*.faa
-*.fna
-*.sdf
-*.mol2
 *.pdbqt
 *.cif
 *.ent
-*.bin
+*.fasta
+*.fa
+*.faa
+*.fna
+
+# Chemical files
+*.sdf
+*.mol2
+*.mol
 
 # Large directories
+tmp/
 src/experiments/
 src/scripts/
 src/data/data_storage/
