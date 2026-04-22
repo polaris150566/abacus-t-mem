@@ -1,0 +1,47 @@
+# ============================================================
+# 统一膜条件配置文件
+# ============================================================
+
+# --- 深度编码方式 ---
+# rbf: RBF编码 + Linear (连续, 原始方式)
+# region_embedding: 3区域Embedding (膜内/跨膜/膜外)
+depth_encoding_mode: rbf
+
+# --- 膜信息注入方式 ---
+# 每种方式独立开关，enabled: true/false
+# 可以同时开多个，也可以全关
+membrane_inject:
+  mem_net_add:
+    enabled: false
+
+  mem_net_concat:
+    enabled: true
+    num_centers: 20
+
+  adaln:
+    enabled: false
+    cond_dim: 128
+    num_rbf_centers: 20
+
+  cross_attn:
+    enabled: false
+    cond_dim: 128
+    num_rbf_centers: 20
+    num_heads: 4
+
+# --- Classifier-Free Guidance ---
+cfg:
+  enabled: true
+  dropout_prob: 0.15
+  guidance_scale: 2.0
+
+# --- Freeze 配置 ---
+# ABACUST 子模块名，列出的会被冻结
+# 空列表 [] 表示不冻结
+freeze: []
+
+# --- 原始氨基酸类别 loss 加权 ---
+# 对指定氨基酸的 loss 乘以对应权重，未指定的默认 1.0
+aa_loss_weights:
+  W: 2.0
+  Y: 2.0

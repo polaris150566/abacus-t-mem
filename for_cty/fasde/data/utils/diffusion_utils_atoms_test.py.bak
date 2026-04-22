@@ -1,0 +1,381 @@
+import numpy as np
+import torch
+import torch.nn.functional as F
+import random
+import logging
+import copy
+
+from torch_geometric.utils import to_dense_adj
+from fairseq.data import data_utils
+from .bonds import make_angle_torsion_index
+
+
+logger = logging.getLogger(__file__)
+
+
+def make_ligand_node_feature(node_attr):
+    from ...modules.diffdock.datasets.process_mols import allowable_features
+    feature_types = [
+        'possible_atomic_num_list',
+        'possible_chirality_list',
+        'possible_degree_list',
+        'possible_formal_charge_list',
+        'possible_implicit_valence_list',
+        'possible_numH_list',
+        'possible_number_radical_e_list',
+        'possible_hybridization_list',
+        'possible_is_aromatic_list',
+        'possible_numring_list',
+        'possible_is_in_ring3_list',
+        'possible_is_in_ring4_list',
+        'possible_is_in_ring5_list',
+        'possible_is_in_ring6_list',
+        'possible_is_in_ring7_list',
+        'possible_is_in_ring8_list',
+    ]
+    feature_sizes = [len(allowable_features[ftype]) for ftype in feature_types]
+
+    num_features = len(feature_types)
+    assert(node_attr.shape[-1] == num_features)
+
+    onehot_feature = []
+    for i in range(num_features):
+        featidx = node_attr[..., i]
+        feat_ = F.one_hot(featidx, num_classes=feature_sizes[i])
+
+        onehot_feature.append(feat_)
+    
+    onehot_feature = torch.cat(onehot_feature, dim=-1)
+    return onehot_feature
+
+
+def make_triple_edges(edge_index, edge_mask):
+    edge_index = edge_index.T
+
+    neighbours = {}
+    for st, ed in edge_index.numpy():
+        if st not in neighbours:
+            neighbours[st] = []
+        if ed not in neighbours:
+            neighbours[ed] = []
+        if ed not in neighbours[st]:
+            neighbours[st].append(ed)
+        if st not in neighbours[ed]:
+            neighbours[ed].append(st)
+
+    tor_edge_index = edge_index[edge_mask]
+    tor_edge_mask = torch.ones((tor_edge_index.shape[0])).float()
+
+    prev_st, next_ed = [], []
+    for st, ed in tor_edge_index.numpy():
+        idx = np.random.permutation(len(neighbours[st]))
+        prev_ = neighbours[st][idx[0]] if neighbours[st][idx[0]] != ed else neighbours[st][idx[1]]
+        idx = np.random.permutation(len(neighbours[ed]))
+        next_ = neighbours[ed][idx[0]] if neighbours[ed][idx[0]] != st else neighbours[ed][idx[1]]
+
+        prev_st.append(prev_)
+        next_ed.append(next_)
+    
+    prev_edge = torch.LongTensor(prev_st)
+    next_edge = torch.LongTensor(next_ed)
+    tor_edge_index = torch.cat([prev_edge[..., None], tor_edge_index, next_edge[..., None]], dim=-1)
+    return tor_edge_index, tor_edge_mask
+
+
+def make_lig_features(data):
+    pos = data['ligand']['pos']
+    node_feature = data['ligand']['x']
+
+    edge = data['ligand', 'lig_bond', 'ligand']
+    edge_index = edge.edge_index
+    edge_attr = edge.edge_attr
+
+    single_feature = make_ligand_node_feature(node_feature)
+    edge_attr = data_utils.pad_to_length(edge_attr + 1, 5, 1, 1)
+    pair_feature = to_dense_adj(edge_index, edge_attr = edge_attr)[0]
+
+    return single_feature, pair_feature
+
+
+def make_complex_feature(
+    rec_feature, raw_data,
+    lig_single_dim, lig_pair_dim,
+    sde,
+    t=None,
+    num_aatypes=22,
+    fix_receptor_backbone = True,
+    use_esm=False,
+    ):
+    lig_pos = raw_data['ligand'].pos
+    lig_len = lig_pos.shape[0]
+
+    lig_atom_positions = torch.zeros((lig_len, 37, 3))
+    lig_atom_positions[:, 1] = lig_pos
+    lig_atom_mask = torch.zeros((lig_len, 37))
+    lig_atom_mask[:, 1] = 1.0
+    rec_atom_positions = rec_feature['all_atom_positions']
+    rec_atom_positions = torch.concat([torch.zeros(1,37,3), rec_atom_positions,torch.zeros(1,37,3)])
+    rec_atom_mask = torch.concat([torch.zeros(1,37), rec_feature['all_atom_mask'],torch.zeros(1,37)])
+    rec_len = rec_atom_positions.shape[0]
+
+    all_atom_positions = torch.cat([rec_atom_positions, lig_atom_positions], dim=0)
+    all_atom_mask = torch.cat([rec_atom_mask, lig_atom_mask], dim=0)
+    
+
+    segment = torch.LongTensor([0] * rec_len + [1] * lig_len)
+    frame_len = rec_len + lig_len
+    rec_single = torch.ones((rec_feature['aatype'].shape[0],1))
+    lig_single = make_ligand_node_feature(raw_data['ligand']['x'])
+    rec_single_dim = rec_single.shape[-1]
+    lig_single_dim = lig_single.shape[-1]
+    single = torch.zeros((frame_len, rec_single_dim + lig_single_dim), dtype=torch.float)
+    single[1:rec_len-1, :rec_single_dim] = rec_single
+    single[rec_len:, rec_single_dim:] = lig_single
+
+    single = torch.cat([single, F.one_hot(segment, num_classes=2)], dim=-1)
+   
+
+    lig_edge = raw_data['ligand', 'lig_bond', 'ligand']
+    lig_edge_index = lig_edge.edge_index
+    lig_edge_attr = lig_edge.edge_attr
+    lig_edge_mask = torch.ones((lig_edge_attr.shape[0],))
+    lig_angle_index, lig_torsion_index = make_angle_torsion_index(lig_edge_index+rec_len)
+    residx = rec_feature['residx']
+    
+    residx = torch.concat([(residx[0]-1)[None], residx,(residx[-1]+1)[None]])
+    rec_edge_index = torch.stack([torch.arange(1,  rec_len-2), torch.arange(1, rec_len-2)+1], dim=0)
+    st, ed = rec_edge_index[0], rec_edge_index[1]
+    is_covalent = (residx[ed] - residx[st]) == 1
+    rec_edge_index = rec_edge_index[:, is_covalent]
+    rev_edge_index = rec_edge_index.clone()
+    rev_edge_index[0] = rec_edge_index[1]
+    rev_edge_index[1] = rec_edge_index[0]
+    rec_edge_index = torch.cat([rec_edge_index, rev_edge_index], dim=-1)
+    num_rec_edge = rec_edge_index.shape[1]
+    edge_index = torch.cat([rec_edge_index, lig_edge_index + rec_len], dim=1)
+    edge_attr = torch.zeros((edge_index.shape[1], lig_edge_attr.shape[1] +1))
+    edge_attr[:num_rec_edge, 0] = 1
+    edge_attr[num_rec_edge:, 1:] = lig_edge_attr
+    residx = torch.cat(
+        [residx, torch.arange(lig_len ) + residx.max() + 30], dim=0
+    )
+    residx_=(residx - torch.min(residx) + 1).tolist()
+    residx=torch.tensor(residx_)
+
+    lig_mask = torch.ones((frame_len,))
+    lig_mask[:rec_len] = 0
+
+    aatype = torch.cat([torch.tensor(33)[None], rec_feature['aatype'], torch.tensor(21)[None], torch.LongTensor([20]*lig_len)], dim=0)
+    node_mask = torch.ones((frame_len,))
+    shuffle_index = np.arange(frame_len)
+    inverse_shuffle_index = shuffle_index
+    # coords = torch.concat([torch.zeros(1,3,3), all_atom_positions[:,:3], torch.zeros(1,3,3)], dim=0)
+    coords = all_atom_positions[:,:3]
+    # residx = residx.numpy()
+    # residx = [1] + list(residx - np.min(residx) + 2) + [np.max(residx) -np.min(residx) + 3]
+    # residx = np.asarray(residx, dtype=np.int64)
+    # residx = torch.from_numpy(residx)
+    tokens = aatype
+    atom_mask = all_atom_mask[:,:3]
+    # atom_mask = torch.concat([torch.ones(1,3), all_atom_mask[:,:3], torch.ones(1,3)],dim=0)
+    # single = torch.concat([torch.zeros(1,single.shape[-1]), single, torch.zeros(1,single.shape[-1])], dim=0)
+    confidence = torch.ones((coords.shape[0]))
+    feature_dict = {
+        'coords': coords,
+        'residx': residx,
+        'atom_mask': atom_mask,
+        'node_mask': node_mask,
+        'lig_mask': lig_mask,
+        'rec_node_mask': node_mask[:rec_len],
+        'lig_node_mask': node_mask[rec_len:],
+        'single': single,
+        'edge_index': edge_index.transpose(0, 1),
+        'edge_attr': edge_attr,
+        'seg_len': torch.LongTensor([rec_len, lig_len]),
+        'aatype': aatype,
+        'tokens': tokens,
+        'target_shuf_index': torch.from_numpy(shuffle_index),
+        'target_inv_shuf_index': torch.from_numpy(inverse_shuffle_index),
+        'confidence': confidence,
+
+    }
+    
+    chainidx = torch.zeros((frame_len,)).long()
+    ch1, ch2 = rec_feature['chainidx'][0], rec_feature['chainidx'][-1]
+    chainidx[:rec_len] = torch.concat([ch1[None], rec_feature['chainidx'],ch2[None] ])  + 1
+    chainidx = chainidx + 1
+    feature_dict['chainidx'] = chainidx
+  
+    return feature_dict
+
+def make_protein_feature(
+    rec_feature, raw_data,
+    lig_single_dim, lig_pair_dim,
+    sde,
+    t=None,
+    num_aatypes=22,
+    fix_receptor_backbone = True,
+    use_esm=False,
+    ):
+    rec_atom_positions = rec_feature['all_atom_positions']
+    rec_atom_positions = torch.concat([torch.zeros(1,37,3), rec_atom_positions,torch.zeros(1,37,3)])
+    rec_atom_mask = torch.concat([torch.zeros(1,37), rec_feature['all_atom_mask'],torch.zeros(1,37)])
+    rec_len = rec_atom_positions.shape[0]
+
+    all_atom_positions = rec_atom_positions
+    all_atom_mask = rec_atom_mask
+    
+
+    segment = torch.LongTensor([0] * rec_len )
+    frame_len = rec_len 
+    rec_single = torch.ones((rec_feature['aatype'].shape[0],1))
+    rec_single_dim = rec_single.shape[-1]
+    lig_single_dim = 199
+
+    single = torch.zeros((frame_len, rec_single_dim + lig_single_dim), dtype=torch.float)
+    single[1:rec_len-1, :rec_single_dim] = rec_single
+    single = torch.cat([single, F.one_hot(segment, num_classes=2)], dim=-1)
+    residx = rec_feature['residx']
+    
+    residx = torch.concat([(residx[0]-1)[None], residx,(residx[-1]+1)[None]])
+    rec_edge_index = torch.stack([torch.arange(1,  rec_len-2), torch.arange(1, rec_len-2)+1], dim=0)
+    st, ed = rec_edge_index[0], rec_edge_index[1]
+    is_covalent = (residx[ed] - residx[st]) == 1
+    rec_edge_index = rec_edge_index[:, is_covalent]
+    rev_edge_index = rec_edge_index.clone()
+    rev_edge_index[0] = rec_edge_index[1]
+    rev_edge_index[1] = rec_edge_index[0]
+    rec_edge_index = torch.cat([rec_edge_index, rev_edge_index], dim=-1)
+    num_rec_edge = rec_edge_index.shape[1]
+    edge_index = rec_edge_index
+    edge_attr = torch.zeros((edge_index.shape[1], 5))
+    edge_attr[:num_rec_edge, 0] = 1
+
+    residx_=(residx - torch.min(residx) + 1).tolist()
+    residx=torch.tensor(residx_)
+
+    lig_mask = torch.ones((frame_len,))
+    lig_mask[:rec_len] = 0
+
+    aatype = torch.cat([torch.tensor(33)[None], rec_feature['aatype'], torch.tensor(21)[None], ], dim=0)
+    node_mask = torch.ones((frame_len,))
+    shuffle_index = np.arange(frame_len)
+    inverse_shuffle_index = shuffle_index
+    coords = all_atom_positions[:,:3]
+    tokens = aatype
+    atom_mask = all_atom_mask[:,:3]
+    if residx.shape[0]!=coords.shape[0]:
+        import pdb; pdb.set_trace()
+    confidence = torch.ones((coords.shape[0]))
+    
+    feature_dict = {
+        'coords': coords,
+        'residx': residx,
+        'atom_mask': atom_mask,
+        'node_mask': node_mask,
+        'lig_mask': lig_mask,
+        'rec_node_mask': node_mask[:rec_len],
+        'lig_node_mask': node_mask[rec_len:],
+        'single': single,
+        'seg_len': torch.LongTensor([rec_len, 0]),
+        'aatype': aatype,
+        'tokens': tokens,
+        'edge_index': edge_index.transpose(0, 1),
+        'edge_attr': edge_attr,
+        'target_shuf_index': torch.from_numpy(shuffle_index),
+        'target_inv_shuf_index': torch.from_numpy(inverse_shuffle_index),
+        'confidence': confidence
+    }
+    
+    chainidx = torch.zeros((frame_len,)).long()
+    ch1, ch2 = rec_feature['chainidx'][0], rec_feature['chainidx'][-1]
+    chainidx[:rec_len] = torch.concat([ch1[None], rec_feature['chainidx'],ch2[None] ])  + 1
+    chainidx = chainidx + 1
+    feature_dict['chainidx'] = chainidx
+
+    return feature_dict
+
+
+def make_af_feature(
+    rec_feature,
+    num_aatypes=22,
+    fix_receptor_backbone = True,
+    use_esm=False,
+    ):
+    rec_atom_positions = rec_feature['coords']
+    atom_mask = ((rec_atom_positions.norm(dim=-1))<10000).float()
+    rec_atom_positions = torch.concat([torch.zeros(1,3,3), rec_atom_positions,torch.zeros(1,3,3)])
+    rec_atom_mask = torch.concat([torch.zeros(1, 3), atom_mask, torch.zeros(1,3)])
+    rec_len = rec_atom_positions.shape[0]
+    all_atom_positions = rec_atom_positions
+    all_atom_mask = rec_atom_mask
+    
+
+    segment = torch.LongTensor([0] * rec_len )
+    frame_len = rec_len 
+    rec_single = torch.ones((rec_feature['aatype'].shape[0],1))
+    rec_single_dim = rec_single.shape[-1]
+    lig_single_dim = 199
+
+    single = torch.zeros((frame_len, rec_single_dim + lig_single_dim), dtype=torch.float)
+    single[1:rec_len-1, :rec_single_dim] = rec_single
+    single = torch.cat([single, F.one_hot(segment, num_classes=2)], dim=-1)
+    residx = rec_feature['residx']
+    
+    residx = torch.concat([(residx[0]-1)[None], residx,(residx[-1]+1)[None]])
+    rec_edge_index = torch.stack([torch.arange(1,  rec_len-2), torch.arange(1, rec_len-2)+1], dim=0)
+    st, ed = rec_edge_index[0], rec_edge_index[1]
+    is_covalent = (residx[ed] - residx[st]) == 1
+    rec_edge_index = rec_edge_index[:, is_covalent]
+    rev_edge_index = rec_edge_index.clone()
+    rev_edge_index[0] = rec_edge_index[1]
+    rev_edge_index[1] = rec_edge_index[0]
+    rec_edge_index = torch.cat([rec_edge_index, rev_edge_index], dim=-1)
+    num_rec_edge = rec_edge_index.shape[1]
+    edge_index = rec_edge_index
+    edge_attr = torch.zeros((edge_index.shape[1], 5))
+    edge_attr[:num_rec_edge, 0] = 1
+
+    residx_=(residx - torch.min(residx) + 1).tolist()
+    residx=torch.tensor(residx_)
+
+    lig_mask = torch.ones((frame_len,))
+    lig_mask[:rec_len] = 0
+
+    aatype = torch.cat([torch.tensor(33)[None], rec_feature['aatype'], torch.tensor(21)[None], ], dim=0)
+    node_mask = torch.ones((frame_len,))
+    shuffle_index = np.arange(frame_len)
+    inverse_shuffle_index = shuffle_index
+    coords = all_atom_positions[:,:3]
+    tokens = aatype
+    atom_mask = all_atom_mask[:,:3]
+    confidence = torch.concat([torch.tensor(0.0)[None], rec_feature['confidence'], torch.tensor(0.0)[None]])
+    feature_dict = {
+        'coords': coords,
+        'residx': residx,
+        'atom_mask': atom_mask,
+        'node_mask': node_mask,
+        'lig_mask': lig_mask,
+        'rec_node_mask': node_mask[:rec_len],
+        'lig_node_mask': node_mask[rec_len:],
+        'single': single,
+        'seg_len': torch.LongTensor([rec_len, 0]),
+        'aatype': aatype,
+        'tokens': tokens,
+        'edge_index': edge_index.transpose(0, 1),
+        'edge_attr': edge_attr,
+        'target_shuf_index': torch.from_numpy(shuffle_index),
+        'target_inv_shuf_index': torch.from_numpy(inverse_shuffle_index),
+        'confidence': confidence
+    }
+    
+    chainidx = torch.ones((frame_len,)).long()
+    # ch1, ch2 = rec_feature['chainidx'][0], rec_feature['chainidx'][-1]
+    # chainidx[:rec_len] = torch.concat([ch1[None], rec_feature['chainidx'],ch2[None] ])  + 1
+    chainidx = chainidx + 1
+    feature_dict['chainidx'] = chainidx
+
+    return feature_dict
+
+
+

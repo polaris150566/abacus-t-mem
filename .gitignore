@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.eggs/
+*.egg
+
+# Logs and outputs
+log_dir/
+*.log
+*.out
+
+# Model weights
+*.pt
+*.pth
+*.ckpt
+
+# Data files
+*.pkl
+*.npy
+*.npz
+*.bin
+
+# Protein/Structure files
+*.pdb
+*.pdbqt
+*.cif
+*.ent
+*.fasta
+*.fa
+*.faa
+*.fna
+
+# Chemical files
+*.sdf
+*.mol2
+*.mol
+
+# Large directories
+src/scripts/log/
+src/scripts/log_dir/
+tmp/
+src/experiments/
+src/data/data_storage/
+src/data/raw_data/
+src/data/tmAFDB_data/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

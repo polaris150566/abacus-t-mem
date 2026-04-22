@@ -1,0 +1,544 @@
+import numpy as np
+import torch
+import torch.nn.functional as F
+import random
+import logging
+import copy
+
+from torch_geometric.utils import to_dense_adj
+from unifold.modules.pytorch3d import transforms
+from unifold.data import residue_constants as rc
+from unicore.data import data_utils
+
+from ...modules.diffdock.utils import so3, torus
+from ...modules.diffdock.utils.diffusion_utils import modify_conformer
+
+
+logger = logging.getLogger(__file__)
+
+
+def make_ligand_node_feature(node_attr):
+    from ...modules.diffdock.datasets.process_mols import allowable_features
+    feature_types = [
+        'possible_atomic_num_list',
+        'possible_chirality_list',
+        'possible_degree_list',
+        'possible_formal_charge_list',
+        'possible_implicit_valence_list',
+        'possible_numH_list',
+        'possible_number_radical_e_list',
+        'possible_hybridization_list',
+        'possible_is_aromatic_list',
+        'possible_numring_list',
+        'possible_is_in_ring3_list',
+        'possible_is_in_ring4_list',
+        'possible_is_in_ring5_list',
+        'possible_is_in_ring6_list',
+        'possible_is_in_ring7_list',
+        'possible_is_in_ring8_list',
+    ]
+
+    feature_sizes = [len(allowable_features[ftype]) for ftype in feature_types]
+
+    num_features = len(feature_types)
+    assert(node_attr.shape[-1] == num_features)
+
+    onehot_feature = []
+    for i in range(num_features):
+        featidx = node_attr[..., i]
+        feat_ = F.one_hot(featidx, num_classes=feature_sizes[i])
+
+        onehot_feature.append(feat_)
+    
+    onehot_feature = torch.cat(onehot_feature, dim=-1)
+    return onehot_feature
+
+
+def make_triple_edges(edge_index, edge_mask):
+    edge_index = edge_index.T
+
+    neighbours = {}
+    for st, ed in edge_index.numpy():
+        if st not in neighbours:
+            neighbours[st] = []
+        if ed not in neighbours:
+            neighbours[ed] = []
+        if ed not in neighbours[st]:
+            neighbours[st].append(ed)
+        if st not in neighbours[ed]:
+            neighbours[ed].append(st)
+
+    tor_edge_index = edge_index[edge_mask]
+    tor_edge_mask = torch.ones((tor_edge_index.shape[0])).float()
+
+    prev_st, next_ed = [], []
+    for st, ed in tor_edge_index.numpy():
+        idx = np.random.permutation(len(neighbours[st]))
+        prev_ = neighbours[st][idx[0]] if neighbours[st][idx[0]] != ed else neighbours[st][idx[1]]
+        idx = np.random.permutation(len(neighbours[ed]))
+        next_ = neighbours[ed][idx[0]] if neighbours[ed][idx[0]] != st else neighbours[ed][idx[1]]
+
+        prev_st.append(prev_)
+        next_ed.append(next_)
+    
+    prev_edge = torch.LongTensor(prev_st)
+    next_edge = torch.LongTensor(next_ed)
+    tor_edge_index = torch.cat([prev_edge[..., None], tor_edge_index, next_edge[..., None]], dim=-1)
+    return tor_edge_index, tor_edge_mask
+
+
+def sample_t_update(
+        rec, data, 
+        rec_tr_sigma_min, rec_tr_sigma_max, 
+        rec_rot_sigma_min, rec_rot_sigma_max, 
+        rec_tor_sigma_min, rec_tor_sigma_max, 
+        lig_tr_sigma_min, lig_tr_sigma_max, 
+        lig_rot_sigma_min, lig_rot_sigma_max, 
+        lig_tor_sigma_min, lig_tor_sigma_max, 
+        t=None,
+        freeze_receptor=False,
+    ):
+    if data is not None:
+        if not torch.is_tensor(data['ligand'].pos):
+            data['ligand'].pos = random.choice(data['ligand'].pos)
+
+    if t is None:
+        t = np.random.uniform()
+
+    rec_tr_sigma = rec_tr_sigma_min ** (1-t) * rec_tr_sigma_max ** t
+    rec_rot_sigma = rec_rot_sigma_min ** (1-t) * rec_rot_sigma_max ** t
+    rec_tor_sigma = rec_tor_sigma_min ** (1-t) * rec_tor_sigma_max ** t
+    lig_tr_sigma = lig_tr_sigma_min ** (1-t) * lig_tr_sigma_max ** t
+    lig_rot_sigma = lig_rot_sigma_min ** (1-t) * lig_rot_sigma_max ** t
+    lig_tor_sigma = lig_tor_sigma_min ** (1-t) * lig_tor_sigma_max ** t
+
+    t_sigmas = {
+        'rec_tr_sigma': torch.FloatTensor([rec_tr_sigma]),
+        'rec_rot_sigma': torch.FloatTensor([rec_rot_sigma]),
+        'rec_tor_sigma': torch.FloatTensor([rec_tor_sigma]),
+        'lig_tr_sigma': torch.FloatTensor([lig_tr_sigma]),
+        'lig_rot_sigma': torch.FloatTensor([lig_rot_sigma]),
+        'lig_tor_sigma': torch.FloatTensor([lig_tor_sigma]),
+    }
+
+    # ligand update
+    if data is not None:
+        lig_tr_update = torch.normal(mean=0, std=lig_tr_sigma, size=(1, 3)) 
+        lig_rot_update = so3.sample_vec(eps=lig_rot_sigma) 
+        lig_torsion_updates = np.random.normal(loc=0.0, scale=lig_tor_sigma, size=data['ligand'].edge_mask.sum())
+        modify_conformer(data, lig_tr_update, torch.from_numpy(lig_rot_update).float(), lig_torsion_updates)
+
+        lig_tr_score = -lig_tr_update / lig_tr_sigma ** 2
+        lig_rot_score = torch.from_numpy(so3.score_vec(vec=lig_rot_update, eps=lig_rot_sigma)).float().unsqueeze(0)
+        lig_tor_score = torch.from_numpy(torus.score(lig_torsion_updates, lig_tor_sigma)).float()
+        lig_tor_sigma_edge = torch.FloatTensor(np.ones(data['ligand'].edge_mask.sum()) * lig_tor_sigma)
+    else:
+        lig_tr_score = torch.zeros((1, 3))
+        lig_rot_score = torch.zeros((1, 3))
+        lig_tor_score = torch.zeros((1,))
+        lig_tor_sigma_edge = torch.FloatTensor(np.ones(1) * lig_tor_sigma)
+
+    # receptor update
+    rec_size = rec['tr'].shape[0]
+    rec_tr_update = torch.normal(mean=0, std=rec_tr_sigma, size=(rec_size, 3))
+    rec_rot_update = torch.from_numpy(np.stack([so3.sample_vec(eps=rec_rot_sigma) for _ in range(rec_size)], axis=0)).float()
+    rec_torsion_updates = torch.from_numpy(np.random.normal(loc=0.0, scale=rec_tor_sigma, size=rec_size * 4)).float()
+    rec_torsion_updates = torch.reshape(rec_torsion_updates, (rec_size, 4))
+
+    rec_tor = rec['tor'] + rec_torsion_updates
+    rec_rot_update_matrix = transforms.axis_angle_to_matrix(rec_rot_update)
+    rec_rot = rec_rot_update_matrix @ rec['rot']
+    rec_tr = (rec_rot_update_matrix @ rec['tr'][..., None]).squeeze(-1) + rec_tr_update
+
+    rec_tr_score = -rec_tr_update / rec_tr_sigma ** 2
+    rec_rot_score = [so3.score_vec(vec=rot_update, eps=rec_rot_sigma) for rot_update in rec_rot_update.numpy()]
+    rec_rot_score = torch.FloatTensor(np.stack(rec_rot_score, axis=0))
+    rec_tor_score = torch.from_numpy(torus.score(rec_torsion_updates.numpy(), rec_tor_sigma)).float()
+
+    if freeze_receptor:
+        rec_new = {
+            'rot': rec['rot'],
+            'tr': rec['tr'],
+            'tor': rec['tor'],
+        }
+        rec_tr_score = rec_tr_score * 0.0
+        rec_tor_score = rec_tor_score * 0.0
+        rec_rot_score = rec_rot_score * 0.0
+    else:
+        rec_new = {
+            'rot': rec_rot,
+            'tr': rec_tr,
+            'tor': rec_tor,
+        }
+
+    scores = {
+        'rec_tr_score': rec_tr_score,
+        'rec_rot_score': rec_rot_score,
+        'rec_tor_score': rec_tor_score,
+        'lig_tr_score': lig_tr_score,
+        'lig_rot_score': lig_rot_score,
+        'lig_tor_score': lig_tor_score,
+    }
+    return rec_new, data, t_sigmas, scores, t
+
+
+def make_lig_features(data):
+    pos = data['ligand']['pos']
+    node_feature = data['ligand']['x']
+
+    edge = data['ligand', 'lig_bond', 'ligand']
+    edge_index = edge.edge_index
+    edge_attr = edge.edge_attr
+
+    single_feature = make_ligand_node_feature(node_feature)
+
+    # add an attribute for valid edge
+    edge_attr = data_utils.pad_to_length(edge_attr + 1, 5, 1, 1)
+    pair_feature = to_dense_adj(edge_index, edge_attr = edge_attr)[0]
+
+    return single_feature, pair_feature
+
+
+def make_complex_feature(
+    rec_feature, raw_data,
+    lig_single_dim, lig_pair_dim,
+    sde,
+    t=None,
+    freeze_receptor=False,
+    num_aatypes=22,
+    use_clamped_fape_prob = 1.0,
+    fix_receptor_backbone = True,
+    ):
+    lig_pos = raw_data['ligand'].pos
+    lig_len = lig_pos.shape[0]
+
+    lig_atom_positions = torch.zeros((lig_len, 37, 3))
+    lig_atom_positions[:, 1] = lig_pos
+    lig_atom_mask = torch.zeros((lig_len, 37))
+    lig_atom_mask[:, 1] = 1.0
+
+    rec_atom_positions = rec_feature['all_atom_positions']
+    rec_atom_mask = rec_feature['all_atom_mask']
+    rec_len = rec_atom_positions.shape[0]
+
+    all_atom_positions = torch.cat([rec_atom_positions, lig_atom_positions], dim=0)
+    all_atom_mask = torch.cat([rec_atom_mask, lig_atom_mask], dim=0)
+
+    if t is None:
+        t = np.random.uniform()
+        t = torch.FloatTensor([t])
+
+    lig_center = lig_pos.mean(0, keepdims=True).tile(lig_len, 1)
+    all_center = torch.cat([rec_atom_positions[:, 1], lig_center], dim=0)
+
+    all_atom_positions_rmcenter = all_atom_positions - all_center[:, None]
+
+    noise = torch.randn_like(all_atom_positions_rmcenter)
+    mcoef, std = sde.marginal_prob_coeff(t)
+    
+    x_t = mcoef * all_atom_positions_rmcenter + std * noise
+    x_t = x_t + all_center[:, None]
+
+    if fix_receptor_backbone:
+        x_t[:rec_len, :3] = rec_atom_positions[:, :3] # atom N, CA, C
+        x_t[:rec_len, 4] = rec_atom_positions[:, 4]   # atom O
+    x_t = x_t * all_atom_mask[..., None]
+
+    segment = torch.LongTensor([0] * rec_len + [1] * lig_len)
+    frame_len = rec_len + lig_len
+
+    rec_single = torch.cat([
+        rec_feature['esm'], F.one_hot(rec_feature['aatype'], num_classes=num_aatypes)
+    ], dim=-1)
+
+    # lig_single, lig_pair = make_lig_features(raw_data)
+    lig_single = make_ligand_node_feature(raw_data['ligand']['x'])
+    rec_single_dim = rec_single.shape[-1]
+    lig_single_dim = lig_single.shape[-1]
+
+    single = torch.zeros((frame_len, rec_single_dim + lig_single_dim), dtype=torch.float)
+    single[:rec_len, :rec_single_dim] = rec_single
+    single[rec_len:, rec_single_dim:] = lig_single
+
+    single = torch.cat([single, F.one_hot(segment, num_classes=2)], dim=-1)
+    rots = torch.cat(
+        [rec_feature['rot'], torch.eye(3)[None].tile(lig_len, 1, 1)], dim=0
+    )
+
+    lig_edge = raw_data['ligand', 'lig_bond', 'ligand']
+    lig_edge_index = lig_edge.edge_index
+    lig_edge_attr = lig_edge.edge_attr
+
+    rec_edge_index = torch.stack([torch.arange(rec_len-1), torch.arange(rec_len-1)+1], dim=0)
+    st, ed = rec_edge_index[0], rec_edge_index[1]
+    is_covalent = (rec_feature['residx'][ed] - rec_feature['residx'][st]) == 1
+    rec_edge_index = rec_edge_index[:, is_covalent]
+    rev_edge_index = rec_edge_index.clone()
+    rev_edge_index[0] = rec_edge_index[1]
+    rev_edge_index[1] = rec_edge_index[0]
+    rec_edge_index = torch.cat([rec_edge_index, rev_edge_index], dim=-1)
+    num_rec_edge = rec_edge_index.shape[1]
+    num_lig_edge = lig_edge_index.shape[1]
+
+    edge_index = torch.cat([rec_edge_index, lig_edge_index + rec_len], dim=1)
+    edge_attr = torch.zeros((edge_index.shape[1], lig_edge_attr.shape[1] +1))
+    edge_attr[:num_rec_edge, 0] = 1
+    edge_attr[num_rec_edge:, 1:] = lig_edge_attr
+
+
+    residx = rec_feature['residx']
+    residx = torch.cat(
+        [residx, torch.arange(lig_len ) + residx.max() + 30], dim=0
+    )
+    residx_=(residx - torch.min(residx) + 1).tolist()
+    residx=torch.tensor(residx_)
+
+    lig_mask = torch.ones((frame_len,))
+    lig_mask[:rec_len] = 0
+
+    feature_dict = {
+        'atom_positions_0': all_atom_positions,
+        'atom_positions_t': x_t,
+        'atom_mask': all_atom_mask,
+        'rot': rots,
+        't': t,
+        'single': single,
+        'edge_index': edge_index.transpose(0, 1),
+        'edge_attr':edge_attr,
+        'seg_len': torch.LongTensor([rec_len, lig_len]),
+        'edge_size': torch.LongTensor([num_rec_edge, num_lig_edge]),
+        'residx':residx,
+        'lig_mask':lig_mask,
+    }
+
+    return feature_dict
+
+
+    ###################################
+    if raw_data is not None:
+        lig = raw_data['ligand']
+        lig_edges = raw_data['ligand', 'lig_bond', 'ligand']
+        raw_data['ligand'].rot = torch.eye(3)
+        raw_data['ligand'].tr = raw_data['ligand'].pos.mean(0)
+        
+        lig_rot_0 = raw_data['ligand'].rot[None]
+        lig_tr_0 = raw_data['ligand'].tr[None]
+        lig_pos_0 = raw_data['ligand'].pos
+    else:
+        lig, lig_edges = None, None
+
+    rec = {
+        'rot': rec_feature['rot'].clone(),
+        'tr': rec_feature['tr'].clone(),
+        'tor': rec_feature['tor'].clone(),
+        # 'aatype': rec_feature['aatype'].clone(),
+        # 'all_atom_mask': rec_feature['all_atom_mask'].clone(),
+        # 'chi_mask': rec_feature['chi_mask'].clone(),
+    }
+    rec_new, data_new, t_sigmas, scores, t = sample_t_update(
+        rec, raw_data,
+        rec_tr_sigma_min, rec_tr_sigma_max, 
+        rec_rot_sigma_min, rec_rot_sigma_max, 
+        rec_tor_sigma_min, rec_tor_sigma_max, 
+        lig_tr_sigma_min, lig_tr_sigma_max, 
+        lig_rot_sigma_min, lig_rot_sigma_max, 
+        lig_tor_sigma_min, lig_tor_sigma_max,
+        freeze_receptor = freeze_receptor
+    )
+    rec_new['tor'] = rec_new['tor'] * rec_feature['chi_mask']
+
+    rec_len = rec_feature['rot'].shape[0]
+    if lig is not None:
+        lig_single, lig_pair = make_lig_features(data_new)
+        lig_tr = data_new['ligand'].tr[None]
+        lig_rot = data_new['ligand'].rot[None]
+        
+        lig_len = lig_single.shape[0]
+        lig_pos = data_new['ligand'].pos
+        edge_index = raw_data['ligand', 'lig_bond', 'ligand'].edge_index
+        edge_index += rec_len + 1
+        edge_mask = raw_data['ligand'].edge_mask
+    else:
+        lig_len = 1
+        lig_single = torch.zeros((1, lig_single_dim))
+        lig_pair = torch.zeros((1, 1, lig_pair_dim))
+        lig_rot = torch.eye(3)[None]
+        lig_tr = torch.zeros((1, 3))
+        lig_rot_0 = torch.eye(3)[None]
+        lig_tr_0 = torch.zeros((1, 3))
+        lig_pos = lig_tr.clone()
+        lig_por_0 = lig_pos.clone()
+
+        edge_index = torch.LongTensor([0, 1]).unsqueeze(-1)
+        edge_mask = torch.Tensor([False])
+
+    if edge_mask.sum() > 0:
+        tor_edge_index, tor_edge_mask = make_triple_edges(edge_index, edge_mask)
+        # tor_edge_index = edge_index.T[edge_mask]
+        # tor_edge_mask = torch.ones((tor_edge_index.shape[0])).float()
+    else:
+        tor_edge_index = torch.zeros((1, 4)).long()
+        tor_edge_mask = torch.zeros((1,))
+
+    segment = torch.LongTensor([0] * rec_len + [1] + [2] * lig_len)
+    frame_len = rec_len + lig_len + 1
+
+    node_mask = torch.ones((frame_len,))
+    lig_mask = torch.ones((frame_len,))
+    lig_mask[:rec_len] = 0
+    struct_module_mask = torch.ones((frame_len,))
+    struct_module_mask[:rec_len+1] = 1
+    if lig is None:
+        node_mask[rec_len:] = 0
+        struct_module_mask[rec_len:] = 0
+        lig_mask[rec_len:] = 0
+
+    rec_single = torch.cat([
+        rec_feature['esm'], F.one_hot(rec_feature['aatype'], num_classes=num_aatypes), rec_new['tor'],
+        # F.one_hot(segment, num_classes=3), node_mask[..., None],
+    ], dim=-1)
+    lig_frame_single = torch.zeros((rec_single.shape[-1],))
+    lig_frame_single[rec_feature['esm'].shape[-1] + num_aatypes - 1 ] = 1.
+
+    rec_single_dim = rec_single.shape[-1]
+    lig_single_dim = lig_single.shape[-1]
+
+    single = torch.zeros((frame_len, rec_single_dim + lig_single_dim), dtype=torch.float)
+    single[:rec_len, :rec_single_dim] = rec_single
+    single[rec_len, :rec_single_dim] = lig_frame_single
+    single[rec_len+1:, rec_single_dim:] = lig_single
+
+    single = torch.cat([single, F.one_hot(segment, num_classes=3), node_mask[..., None]], dim=-1)
+    tr = torch.cat([rec_new['tr'], lig_tr, lig_pos], dim=0)
+    rots = torch.cat(
+        [rec_new['rot'], lig_rot, torch.eye(3)[None].tile(lig_len, 1, 1)], dim=0
+    )
+    tor = torch.zeros((frame_len, 4)).float()
+    tor[:rec_len] = rec_new['tor']
+    full_chi_mask = torch.zeros((frame_len, 4)).float()
+    full_chi_mask[:rec_len] = rec_feature['chi_mask']
+
+    lig_pair_ext = torch.zeros((frame_len, frame_len, lig_pair.shape[-1]))
+    lig_pair_ext[-lig_len:, -lig_len:] = lig_pair
+
+    residx = rec_feature['residx']
+    residx = torch.cat(
+        [residx, torch.arange(lig_len + 1) + residx.max() + 100], dim=0
+    )
+
+    use_clamped_fape = 1 if np.random.uniform() < use_clamped_fape_prob else 0
+    use_clamped_fape = torch.LongTensor([use_clamped_fape])
+
+    prior_ca = torch.zeros((frame_len, 3))
+    prior_ca[:rec_len] = rec['tr']
+    rec_mask = torch.zeros((frame_len,))
+    rec_mask[:rec_len] = 1.0
+
+    rot_0 = torch.eye(3)[None].tile(frame_len, 1, 1)
+    rot_0[:rec_len] = rec['rot']
+    rot_0[rec_len] = lig_rot_0[0]
+
+    tr_0 = torch.zeros((frame_len, 3))
+    tr_0[:rec_len] = rec['tr']
+    tr_0[rec_len] = lig_tr_0[0]
+    lig_pos_0 = raw_data['ligand'].pos
+    # tr_0[rec_len] = lig_pos_0.mean(0)
+    tr_0[rec_len+1:] = lig_pos_0
+
+    tor_0 = torch.zeros((frame_len, 4))
+    tor_0[:rec_len] = rec['tor']
+
+    full_aatype = torch.zeros((frame_len,)).long()
+    full_aatype[:rec_len] = rec_feature['aatype']
+    full_aatype[rec_len] = rc.restype_order_with_x['G']
+
+    freeze_backbone = torch.zeros((frame_len,))
+    if freeze_receptor:
+        freeze_backbone[:rec_len] = 1.0
+
+    feature_dict = {
+        **rec_feature,
+        **t_sigmas,
+        **scores,
+        "full_aatype": full_aatype,
+        "residx": residx,
+        "feature1d": single,
+        "node_tr": tr,
+        "node_rot": rots,
+        "node_tor": tor,
+        "full_tor_mask": full_chi_mask,
+        "lig_pair_ext": lig_pair_ext,
+        "edge_index": edge_index.transpose(0, 1),
+        "edge_mask": edge_mask,
+        "num_lig_edges": torch.LongTensor([edge_mask.shape[0]]),
+        "segment": segment,
+        "rec_len": torch.LongTensor([rec_len]),
+        "lig_len": torch.LongTensor([lig_len]),
+        "t": torch.FloatTensor([t]),
+        'rot_0': rot_0,
+        'tr_0': tr_0,
+        'tor_0': tor_0,
+        'resolution': torch.FloatTensor([2.0]),
+        'seq_mask': rec_feature['frame_mask'],
+        'use_clamped_fape': use_clamped_fape, 
+        'prior_ss_permute_ca': prior_ca,
+        'node_mask': node_mask,
+        'structure_module_mask': struct_module_mask,
+        'rec_mask': rec_mask,
+        'lig_mask': lig_mask,
+        'lig_tor_edge_index': tor_edge_index,
+        'lig_tor_edge_mask': tor_edge_mask,
+        'freeze_backbone': freeze_backbone,
+    }
+    chainidx = torch.zeros((frame_len,)).long()
+    chainidx[:rec_len] = rec_feature['chainidx'] + 1
+    feature_dict['chainidx'] = chainidx
+
+    return feature_dict
+    
+def save_trajectory(
+        rec, data,
+        rec_tr_sigma_min, rec_tr_sigma_max, 
+        rec_rot_sigma_min, rec_rot_sigma_max, 
+        rec_tor_sigma_min, rec_tor_sigma_max, 
+        lig_tr_sigma_min, lig_tr_sigma_max, 
+        lig_rot_sigma_min, lig_rot_sigma_max, 
+        lig_tor_sigma_min, lig_tor_sigma_max, 
+    ):
+    from ...modules.structure_builder import StructureBuilder
+    from ...modules.diffdock.utils.visualise import PDBFile
+    sb = StructureBuilder()
+    pdb = PDBFile()
+
+    if data is not None:
+        if not torch.is_tensor(data['ligand'].pos):
+            data['ligand'].pos = random.choice(data['ligand'].pos)
+
+    t = np.random.uniform()
+    for t in range(200):
+        t = (t + 1) / 200.0
+        rec_tr_sigma = rec_tr_sigma_min ** (1-t) * rec_tr_sigma_max ** t
+        rec_rot_sigma = rec_rot_sigma_min ** (1-t) * rec_rot_sigma_max ** t
+        rec_tor_sigma = rec_tor_sigma_min ** (1-t) * rec_tor_sigma_max ** t
+        lig_tr_sigma = lig_tr_sigma_min ** (1-t) * lig_tr_sigma_max ** t
+        lig_rot_sigma = lig_rot_sigma_min ** (1-t) * lig_rot_sigma_max ** t
+        lig_tor_sigma = lig_tor_sigma_min ** (1-t) * lig_tor_sigma_max ** t
+
+        data_t = copy.deepcopy(data)
+        lig_tr_update = torch.normal(mean=0, std=lig_tr_sigma, size=(1, 3)) 
+        lig_rot_update = so3.sample_vec(eps=lig_rot_sigma) 
+        lig_torsion_updates = np.random.normal(loc=0.0, scale=lig_tor_sigma, size=data_t['ligand'].edge_mask.sum())
+        modify_conformer(data_t, lig_tr_update, torch.from_numpy(lig_rot_update).float(), lig_torsion_updates)
+
+        rec_size = rec['tr'].shape[0]
+        rec_tr_update = torch.normal(mean=0, std=rec_tr_sigma, size=(rec_size, 3))
+        rec_rot_update = torch.from_numpy(np.stack([so3.sample_vec(eps=rec_rot_sigma) for _ in range(rec_size)], axis=0)).float()
+        rec_torsion_updates = torch.from_numpy(np.random.normal(loc=0.0, scale=rec_tor_sigma, size=rec_size * 4)).float()
+        rec_torsion_updates = torch.reshape(rec_torsion_updates, (rec_size, 4))
+
+        rec_tor = rec['tor'] + rec_torsion_updates
+        rec_rot_update_matrix = transforms.axis_angle_to_matrix(rec_rot_update)
+        rec_rot = rec_rot_update_matrix @ rec['rot']
+        rec_tr = (rec_rot_update_matrix @ rec['tr'][..., None]).squeeze(-1) + rec_tr_update
+        aatype = rec['aatype']
+        

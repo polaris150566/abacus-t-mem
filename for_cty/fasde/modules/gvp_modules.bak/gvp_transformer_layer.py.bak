@@ -1,0 +1,317 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Contents of this file were adapted from the open source fairseq repository.
+#
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
+
+from typing import Dict, List, Optional
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from ..multihead_attention import MultiheadAttention
+from .gvp_modules import GVP,LayerNorm,layernorm_vec, Dropout
+from torch import Tensor
+from .util import rbf
+
+
+class GVPTransoformerStackLayer(nn.Module):
+    def __init__(self,args,bias_weight=-0.01,node_in=(1024,256)) -> None:
+        super().__init__()
+
+        self.gvp_transformer_rec = GVPTransformerLayer(args,bias_weight,node_in)
+        self.gvp_transformer_lig = GVPTransformerLayer(args,bias_weight,node_in)
+        self.gvp_transformer_rec_lig = GVPTransformerCrossLayer(args,bias_weight,node_in)
+        self.gvp_transformer_lig_rec = GVPTransformerCrossLayer(args,bias_weight,node_in)
+
+    def forward(self, node_rec, node_lig, batch,index=None):
+        node_rec_s, node_rec_v = node_rec
+        node_lig_s, node_lig_v = node_lig
+        encoder_padding_mask_rec =  ~batch['rec_padding_mask']
+        encoder_padding_mask_lig =  ~batch['lig_padding_mask']
+        # import pdb; pdb.set_trace()
+        node_rec_s = node_rec_s * (1 - encoder_padding_mask_rec.unsqueeze(-1).type_as(node_rec_s))
+        node_lig_s = node_lig_s * (1 - encoder_padding_mask_lig.unsqueeze(-1).type_as(node_lig_s))
+        batch['rec_cent'] = batch['rec_atom_positions_t'][...,1,:]
+        batch['lig_cent'] = batch['lig_atom_positions_t'][...,1,:]
+
+        node_rec_s, node_rec_v = self.gvp_transformer_rec( node_rec, encoder_padding_mask = batch['rec_padding_mask'], coord_a = batch['rec_cent'],)
+        # node_rec_v = node_rec_v *encoder_padding_mask_rec[...,None,None]
+        node_lig_s, node_lig_v = self.gvp_transformer_rec( node_lig, encoder_padding_mask = batch['lig_padding_mask'], coord_a = batch['lig_cent'],)
+        # node_lig_v = node_lig_v *encoder_padding_mask_lig[...,None,None]
+        print(f'gvp_transformer_layer_{index}:')
+        print('node_rec:\t',node_rec_s.norm(dim=[1,2]).cpu().data.numpy(), node_rec_v.norm(dim=[2,3]).norm(dim=-1).cpu().data.numpy())
+        print('node_lig:\t',node_lig_s.norm(dim=[1,2]).cpu().data.numpy(), node_lig_v.norm(dim=[2,3]).norm(dim=-1).cpu().data.numpy())
+        node_rec_s, node_rec_v = self.gvp_transformer_rec_lig( (node_rec_s, node_rec_v), (node_lig_s, node_lig_v), encoder_padding_mask = batch['lig_padding_mask'],\
+            coord_rec = batch['rec_cent'], coord_lig = batch['lig_cent'])
+        # node_rec_v = node_rec_v *encoder_padding_mask_rec[...,None,None]
+        node_lig_s, node_lig_v = self.gvp_transformer_lig_rec( (node_lig_s, node_lig_v), (node_rec_s, node_rec_v), encoder_padding_mask = batch['rec_padding_mask'],\
+            coord_rec = batch['lig_cent'], coord_lig = batch['rec_cent'])
+        # node_lig_v = node_lig_v *encoder_padding_mask_lig[...,None,None]
+        
+        print(f'gvp_transformer_cross_layer_{index}:')
+        print('node_rec:\t',node_rec_s.norm(dim=[1,2]).cpu().data.numpy(), node_rec_v.norm(dim=[2,3]).norm(dim=-1).cpu().data.numpy())
+        print('node_lig:\t',node_lig_s.norm(dim=[1,2]).cpu().data.numpy(), node_lig_v.norm(dim=[2,3]).norm(dim=-1).cpu().data.numpy())
+
+        return (node_rec_s, node_rec_v), (node_lig_s, node_lig_v)
+
+class GVPTransformerLayer(nn.Module):
+    """Encoder layer block.
+    `layernorm -> dropout -> add residual`
+
+    Args:
+        args (argparse.Namespace): parsed command-line arguments
+    """
+
+    def __init__(self,args,bias_weight=-0.05,node_in=(1024,256)):
+        super().__init__()
+        
+        self.args = args
+        self.embed_dim = args.encoder_embed_dim
+        self.self_attn = self.build_self_attention(self.embed_dim,args)
+        self.vec_attn = self.build_vec_attention(self.embed_dim,args)
+
+        self.self_attn_layer_norm = nn.LayerNorm(self.embed_dim)
+
+        self.dropout_module = nn.Dropout(args.dropout)
+        self.dropout_node = Dropout(args.dropout)
+
+        ff_func = []
+        n_feedforward=2
+        vector_gate = True
+        node_dims = node_in
+        if n_feedforward == 1:
+            ff_func.append(GVP(node_dims, node_dims, activations=(None, None)))
+        else:
+            hid_dims = 4*node_dims[0], 2*node_dims[1]
+            ff_func.append(GVP(node_dims, hid_dims, vector_gate=vector_gate))
+            for i in range(n_feedforward-2):
+                ff_func.append(GVP(hid_dims, hid_dims, vector_gate=vector_gate))
+            ff_func.append(GVP(hid_dims, node_dims, activations=(None, None)))
+        self.ff_func = nn.Sequential(*ff_func)
+
+
+        self.gvp_layer_norm = LayerNorm(node_in)
+        node_out = node_in
+        activations = (F.relu, torch.sigmoid)
+        activations = (None, None)
+        self.gvp = GVP(node_in, node_out, activations=activations)
+        self.vec_embed_s = GVP(node_out, (node_out[0], args.encoder_attention_heads), activations=activations)
+        self.vec_embed_v = GVP(node_out, (node_out[0], args.encoder_attention_heads), activations=activations)
+        self.bias_weight = bias_weight
+
+    def build_self_attention(self, embed_dim,args ):
+        return MultiheadAttention(
+            embed_dim,
+            args.encoder_attention_heads,
+            dropout=args.attention_dropout,
+            self_attention=True,
+        )
+
+    def build_vec_attention(self, embed_dim,args ):
+        return MultiheadAttention(
+            embed_dim,
+            args.encoder_attention_heads,
+            dropout=args.attention_dropout,
+            self_attention=False,
+        )
+
+    def residual_connection_tuple(self, x, residual):
+        return ((residual[0] + x[0]), (residual[1] + x[1]))
+
+    def forward(
+        self,
+        s_vec,
+        encoder_padding_mask: Optional[Tensor],
+        attn_mask: Optional[Tensor] = None,
+        coord_a=None,
+    ):
+        s, vec = s_vec
+        s_vec_ = self.gvp(s_vec)  
+        _, vectors_head = self.vec_embed_s(s_vec_)
+        vectors_head = vectors_head.transpose(1,2) 
+        vectors_head = vectors_head + coord_a.unsqueeze(1)    
+        sub_v = vectors_head[...,None,:] - vectors_head[...,None,:,:]
+        attn_bias_v = self.bias_weight * sub_v.norm(dim=-1) 
+
+        s = s.transpose(0,1)
+        residual = s
+        s, _ = self.self_attn(
+            query=s, key=s, value=s,
+            key_padding_mask=encoder_padding_mask,
+            need_weights=False,
+            attn_bias=attn_bias_v,
+            attn_mask=attn_mask
+        )
+        s = self.dropout_module(s)
+        s = s + residual
+        s = self.self_attn_layer_norm(s)
+    
+        _, vectors_head = self.vec_embed_v(s_vec_)
+        vectors_head = vectors_head.transpose(1,2) 
+        vectors_head = vectors_head + coord_a.unsqueeze(1)    
+        sub_v = vectors_head[...,None,:] - vectors_head[...,None,:,:]
+        attn_bias_v = self.bias_weight * sub_v.norm(dim=-1) 
+        residual_vec = vec
+        vec = vec.transpose(0,1)
+        vec, _ = self.vec_attn(
+            query=s, key=s, value=vec,
+            key_padding_mask=encoder_padding_mask,
+            need_weights=False,
+            attn_bias=attn_bias_v,
+            attn_mask=attn_mask
+        )
+
+        vec = vec.transpose(0,1)
+        vec = vec + residual_vec
+        vec = layernorm_vec(vec)
+        s_vec = (s.transpose(0,1),vec)
+        residual_sv = s_vec
+        s_vec = self.ff_func(s_vec)
+        s_vec = self.dropout_node(s_vec)
+        s_vec = self.residual_connection_tuple(s_vec, residual_sv)
+        s_vec = self.gvp_layer_norm(s_vec)
+        return s_vec
+
+class GVPTransformerCrossLayer(nn.Module):
+    """Encoder layer block.
+    `layernorm -> dropout -> add residual`
+
+    Args:
+        args (argparse.Namespace): parsed command-line arguments
+    """
+
+    def __init__(self,args,bias_weight=-1.0,node_in=(1024,256)):
+        super().__init__()
+        
+        self.args = args
+        self.embed_dim = args.encoder_embed_dim
+        self.self_attn = self.build_self_attention(self.embed_dim,args)
+        self.vec_attn = self.build_vec_attention(self.embed_dim,args)
+
+        self.self_attn_layer_norm = nn.LayerNorm(self.embed_dim)
+        self.dropout_module = nn.Dropout(args.dropout)
+        self.dropout_node = Dropout(args.dropout)
+        
+        ff_func = []
+        n_feedforward=2
+        vector_gate = True
+        node_dims = node_in
+        if n_feedforward == 1:
+            ff_func.append(GVP(node_dims, node_dims, activations=(None, None)))
+        else:
+            hid_dims = 4*node_dims[0], 2*node_dims[1]
+            ff_func.append(GVP(node_dims, hid_dims, vector_gate=vector_gate))
+            for i in range(n_feedforward-2):
+                ff_func.append(GVP(hid_dims, hid_dims, vector_gate=vector_gate))
+            ff_func.append(GVP(hid_dims, node_dims, activations=(None, None)))
+        self.ff_func = nn.Sequential(*ff_func)
+
+
+        self.gvp_layer_norm = LayerNorm(node_in)
+        node_out = node_in
+        activations = (F.relu, torch.sigmoid)
+        activations = (None, None)
+        self.gvp_rec = GVP(node_in, node_out, activations=activations)
+        self.gvp_lig = GVP(node_in, node_out, activations=activations)
+
+        self.vec_embed_s_rec = GVP(node_out, (node_out[0], args.encoder_attention_heads), activations=activations)
+        self.vec_embed_v_rec = GVP(node_out, (node_out[0], args.encoder_attention_heads), activations=activations)
+
+        self.vec_embed_s_lig = GVP(node_out, (node_out[0], args.encoder_attention_heads), activations=activations)
+        self.vec_embed_v_lig = GVP(node_out, (node_out[0], args.encoder_attention_heads), activations=activations)
+        self.bias_weight = bias_weight
+
+    def build_self_attention(self, embed_dim,args ):
+        return MultiheadAttention(
+            embed_dim,
+            args.encoder_attention_heads,
+            dropout=args.attention_dropout,
+            self_attention=True,
+        )
+
+    def build_vec_attention(self, embed_dim,args ):
+        return MultiheadAttention(
+            embed_dim,
+            args.encoder_attention_heads,
+            dropout=args.attention_dropout,
+            self_attention=False
+        )
+
+
+    def residual_connection_tuple(self, x, residual):
+        return ((residual[0] + x[0]), (residual[1] + x[1]))
+
+    def residual_connection(self, x, residual):
+        return (x + residual)
+
+    def forward(
+        self,
+        rec, lig,
+        encoder_padding_mask: Optional[Tensor],
+        attn_mask: Optional[Tensor] = None,
+        coord_rec = None,
+        coord_lig = None,
+    ):
+        rec_s, rec_v = rec
+        lig_s, lig_v = lig
+        rec_= self.gvp_rec(rec)  
+        lig_ = self.gvp_lig(lig)
+        lig_s = lig_s.transpose(0,1)
+        lig_v = lig_v.transpose(0,1)
+        
+        _, vectors_head_rec = self.vec_embed_s_rec(rec_)
+        vectors_head_rec = vectors_head_rec.transpose(1,2) 
+        vectors_head_rec = vectors_head_rec + coord_rec.unsqueeze(1)  
+        _, vectors_head_lig = self.vec_embed_s_lig( lig_)
+        vectors_head_lig = vectors_head_lig.transpose(1,2) 
+        vectors_head_lig = vectors_head_lig + coord_lig.unsqueeze(1)   
+        sub_v = vectors_head_rec[...,None,:] - vectors_head_lig[...,None,:,:]
+        attn_bias_v = self.bias_weight * sub_v.norm(dim=-1)    
+
+        rec_s = rec_s.transpose(0,1)
+        residual = rec_s
+        rec_s, _ = self.self_attn(
+            query= rec_s, key=lig_s, value=lig_s,
+            key_padding_mask=encoder_padding_mask,
+            need_weights=False,
+            attn_bias=attn_bias_v,
+            attn_mask=attn_mask
+        )
+        rec_s = self.dropout_module(rec_s)
+        rec_s = rec_s + residual
+        rec_s = self.self_attn_layer_norm(rec_s)
+
+        s_vec = ( rec_s.transpose(0,1), rec_v)
+        _, vectors_head_rec = self.vec_embed_v_rec(rec_)
+        vectors_head_rec = vectors_head_rec.transpose(1,2) 
+        vectors_head_rec = vectors_head_rec + coord_rec.unsqueeze(1)    
+        _, vectors_head_lig = self.vec_embed_v_lig( lig_)
+        vectors_head_lig = vectors_head_lig.transpose(1,2) 
+        vectors_head_lig = vectors_head_lig + coord_lig.unsqueeze(1)
+        sub_v = vectors_head_rec[...,None,:] - vectors_head_lig[...,None,:,:]
+        attn_bias_v = self.bias_weight * sub_v.norm(dim=-1) 
+
+        residual_vec = rec_v
+        rec_v, _ = self.vec_attn(
+            query=rec_s, key=lig_s, value=lig_v,
+            key_padding_mask=encoder_padding_mask,
+            need_weights=False,
+            attn_bias=attn_bias_v,
+            attn_mask=attn_mask
+        )
+
+        rec_v = rec_v.transpose(0,1)
+        rec_v = rec_v + residual_vec
+        rec_v = layernorm_vec(rec_v)
+        s_vec = (rec_s.transpose(0,1), rec_v)
+        residual_sv = s_vec
+        s_vec = self.ff_func(s_vec)
+        s_vec = self.dropout_node(s_vec)
+        s_vec = self.residual_connection_tuple(s_vec, residual_sv)
+        s_vec = self.gvp_layer_norm(s_vec)
+        return s_vec
+
+
+

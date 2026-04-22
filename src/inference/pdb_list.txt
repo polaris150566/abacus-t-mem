@@ -1,0 +1,5 @@
+/home/chenty/public_data/beta2AR/active_state/3P0G.pdb
+/home/chenty/public_data/beta2AR/active_state/3SN6.pdb
+/home/chenty/public_data/beta2AR/active_state/4LDE.pdb
+/home/chenty/public_data/beta2AR/active_state/7BZ2.pdb
+/home/chenty/public_data/beta2AR/active_state/7DHI.pdb
