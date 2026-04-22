@@ -38,9 +38,10 @@ log_dir/
 *.mol
 
 # Large directories
+src/scripts/log/
+src/scripts/log_dir/
 tmp/
 src/experiments/
-src/scripts/
 src/data/data_storage/
 src/data/raw_data/
 src/data/tmAFDB_data/
