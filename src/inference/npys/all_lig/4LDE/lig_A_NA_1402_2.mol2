@@ -1,9 +1,0 @@
-@<TRIPOS>MOLECULE
-/home/chenty/abacust_mem/src/inference/npys/all_lig/4LDE/lig_A_NA_1402_2.pdb
- 1 0 0 0 0
-SMALL
-GASTEIGER
-
-@<TRIPOS>ATOM
-      1 NA         -6.5390   -4.8170  -62.2550 Na    1402  NA1402      0.0000
-@<TRIPOS>BOND
