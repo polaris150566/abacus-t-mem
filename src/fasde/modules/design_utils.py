@@ -1854,7 +1854,7 @@ class ABACUST(nn.Module):
                 gr = G[:, :, :3]
                 gt = G[:, :, 3:]
                 ca = X[:, :, 1, :]
-                r_mem = (torch.bmm(gr, ca.transpose(1, 2)) + gt).transpose(1, 2)
+                r_mem = torch.bmm(gr, (ca + gt.transpose(1, 2)).transpose(1, 2)).transpose(1, 2)
                 half_thickness = N.norm(dim=-1).clamp(min=1e-6)
                 unit_normal = N / half_thickness.unsqueeze(-1)
                 signed_depth = (r_mem * unit_normal.unsqueeze(1)).sum(dim=-1)
@@ -1863,8 +1863,8 @@ class ABACUST(nn.Module):
                 gauss_weight = torch.exp(-((interface_offset - (-5.0)) ** 2) / (2.0 * 2.0 ** 2))
                 per_residue_weight = mem_bg_weight * gauss_weight
                 bg_wy = torch.zeros_like(probs)
-                bg_wy[:, :, 21] = 0.66  # W
-                bg_wy[:, :, 22] = 0.34  # Y
+                bg_wy[:, :, 21] = 0.6  # W
+                bg_wy[:, :, 22] = 0.4  # Y
                 probs = (1 - per_residue_weight.unsqueeze(-1)) * probs + per_residue_weight.unsqueeze(-1) * bg_wy
                 logits = torch.log(probs + 1e-8)
 

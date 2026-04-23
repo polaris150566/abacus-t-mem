@@ -51,7 +51,7 @@ class NormalEncoder(nn.Module):
         gt = G[:, :, 3:]
 
         ca = X[:, :, 1, :]
-        r_mem = (torch.bmm(gr, ca.transpose(1, 2)) + gt).transpose(1, 2)
+        r_mem = torch.bmm(gr, (ca + gt.transpose(1, 2)).transpose(1, 2)).transpose(1, 2)
 
         half_thickness = N.norm(dim=-1).clamp(min=self.eps)
         unit_normal = N / half_thickness.unsqueeze(-1)
@@ -64,6 +64,10 @@ class NormalEncoder(nn.Module):
         if self.encoding_mode == "rbf":
             depth_rbf = interface_offset_rbf_encoding(interface_offset, num_centers=self.num_centers)
             y_emb = self.W_y(depth_rbf) * self.output_scale
+            is_null = half_thickness < 1e-3  # [B]
+            if is_null.any():
+                y_emb = y_emb.clone()
+                y_emb[is_null] = 0.0
             return y_emb, abs_depth, signed_depth
 
         else:  # region_embedding

@@ -49,7 +49,7 @@ class NormalEncoder(nn.Module):
         afv = torch.cross(NM - CA, C - CA, dim=2)  # 骨架朝向 [B, L, 3]
 
         # 仿射变换到膜坐标系
-        R_mem = (torch.bmm(gr, CA.transpose(1, 2)) + gt).transpose(1, 2)  # [B, L, 3]
+        R_mem = torch.bmm(gr, (CA + gt.transpose(1, 2)).transpose(1, 2)).transpose(1, 2)  # [B, L, 3]
 
         N_exp = N.unsqueeze(1)  # [B, 1, 3]
         half_thick_sq = (N_exp * N_exp).sum(dim=-1)  # [B, 1]
