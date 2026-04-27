@@ -40,6 +40,10 @@ cfg:
 # 空列表 [] 表示不冻结
 freeze: []
 
+# --- 膜位置logit偏置MLP ---
+# 是否在W_out之后使用 NormalEncoder输出 + h_V → MLP → logit_bias
+mem_logit_modulation: false
+
 # --- 原始氨基酸类别 loss 加权 ---
 # 对指定氨基酸的 loss 乘以对应权重，未指定的默认 1.0
 aa_loss_weights:

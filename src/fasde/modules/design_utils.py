@@ -1132,6 +1132,8 @@ class ABACUST(nn.Module):
         cfg_dropout_prob=0.15,
         depth_encoding_mode='rbf',
         freeze_modules=None,
+        mem_logit_modulation=False,
+        mem_logit_gate_modulation=False,
         ):
         super(ABACUST, self).__init__()
 
@@ -1164,7 +1166,7 @@ class ABACUST(nn.Module):
         self.cfg_dropout_prob = cfg_dropout_prob
         self._use_tm_depth = 'depth' in self.tm_raw
         self._use_tm_theta = 'theta' in self.tm_raw
-        self._use_tm_any = self._use_tm_depth or self._use_tm_theta
+        self._use_tm_any = self._use_tm_depth or self._use_tm_theta or mem_logit_modulation
         logger.info(f"self.tm_raw:{tm_raw}" )
         logger.info(f"self.mem_between_mode:{mem_between_mode}")
         logger.info(f"tm flags depth/theta: {self._use_tm_depth}/{self._use_tm_theta}")
@@ -1246,6 +1248,10 @@ class ABACUST(nn.Module):
             nn.Linear(hidden_dim, num_letters, bias=True)
         )
         self.mem_net = None
+        self.mem_logit_bias = None
+        self.mem_logit_normal_encoder = None
+        self.mem_logit_gate = None
+        self.mem_logit_rbf_proj = None
         if self._use_tm_any:
             self.mem_net = MembraneNet(
                 self.hidden_dim,
@@ -1255,6 +1261,31 @@ class ABACUST(nn.Module):
                 dropout=dropout,
                 tm_raw_encoding_mode=self.depth_encoding_mode,
             )
+        if mem_logit_modulation:
+            self.mem_logit_normal_encoder = NormalEncoder(
+                y_hidden_dim=128,
+                y_output_dim=hidden_dim,
+                theta_hidden_dim=128,
+                theta_output_dim=hidden_dim,
+                num_centers=self.num_centers,
+                mem_between_mode='none',
+                encoding_mode=self.depth_encoding_mode,
+            )
+            self.mem_logit_bias = nn.Sequential(
+                nn.Linear(hidden_dim * 2, hidden_dim, bias=True),
+                nn.Sigmoid(),
+                nn.Linear(hidden_dim, num_letters, bias=True),
+            )
+            nn.init.zeros_(self.mem_logit_bias[-1].weight)
+            nn.init.zeros_(self.mem_logit_bias[-1].bias)
+
+            if mem_logit_gate_modulation:
+                self.mem_logit_gate = nn.Linear(hidden_dim * 2, num_letters, bias=True)
+                nn.init.zeros_(self.mem_logit_gate.weight)
+                nn.init.zeros_(self.mem_logit_gate.bias)
+                self.mem_logit_rbf_proj = nn.Linear(hidden_dim, num_letters, bias=True)
+                nn.init.zeros_(self.mem_logit_rbf_proj.weight)
+                nn.init.zeros_(self.mem_logit_rbf_proj.bias)
 
 
         self.sc_decoder = SideChainDecoder(
@@ -1541,7 +1572,23 @@ class ABACUST(nn.Module):
                 h_V = layer(h_V, h_ESV, mask)
 
         logits = self.W_out(h_V)
+
+        if self.mem_logit_bias is not None and self.mem_logit_normal_encoder is not None:
+            y_emb, _, _ = self.mem_logit_normal_encoder(X, G, N)
+            y_emb = y_emb.to(dtype=h_V.dtype) * prot_mask[..., None]
+            logits = logits + self.mem_logit_bias(torch.cat([h_V, y_emb], dim=-1))
+
         log_probs = F.log_softmax(logits, dim=-1)
+
+        if self.mem_logit_gate is not None and self.mem_logit_rbf_proj is not None and self.mem_logit_normal_encoder is not None:
+            y_emb, _, _ = self.mem_logit_normal_encoder(X, G, N)
+            y_emb = y_emb.to(dtype=h_V.dtype) * prot_mask[..., None]
+            probs = log_probs.exp()
+            gate = torch.sigmoid(self.mem_logit_gate(torch.cat([h_V, y_emb], dim=-1)))
+            rbf_dist = F.softmax(self.mem_logit_rbf_proj(y_emb), dim=-1)
+            probs = probs + gate * rbf_dist
+            probs = probs / probs.sum(dim=-1, keepdim=True)
+            log_probs = torch.log(probs)
 
         #########################################################
         # self.region_decoder = RegionDecoder(d_in=self.hidden_dim *4)
@@ -1863,9 +1910,12 @@ class ABACUST(nn.Module):
                 gauss_weight = torch.exp(-((interface_offset - (-5.0)) ** 2) / (2.0 * 2.0 ** 2))
                 per_residue_weight = mem_bg_weight * gauss_weight
                 bg_wy = torch.zeros_like(probs)
-                bg_wy[:, :, 21] = 0.6  # W
-                bg_wy[:, :, 22] = 0.4  # Y
+                bg_wy[:, :, 21] = 0.55   # W
+                bg_wy[:, :, 22] = 0.35   # Y
+                bg_wy[:, :, 14] = -0.05  # L (suppress)
                 probs = (1 - per_residue_weight.unsqueeze(-1)) * probs + per_residue_weight.unsqueeze(-1) * bg_wy
+                probs = probs.clamp(min=0)
+                probs = probs / probs.sum(dim=-1, keepdim=True).clamp(min=1e-8)
                 logits = torch.log(probs + 1e-8)
 
             if bg_dist is not None and bg_weight > 0:

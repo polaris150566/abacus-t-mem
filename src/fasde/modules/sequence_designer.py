@@ -165,7 +165,6 @@ class ABACUSTDesigner(nn.Module):
         else:
             _derived_depth_inject_method = 'none'
 
-        # tm_raw: if any membrane inject is enabled, must contain 'depth' for mem_net to be built
         _cli_tm_raw = args.tm_raw
         if _derived_use_depth and 'depth' not in _cli_tm_raw:
             _cli_tm_raw = 'depth_' + _cli_tm_raw
@@ -203,6 +202,8 @@ class ABACUSTDesigner(nn.Module):
             "cfg_dropout_prob": _cfg_config.get('dropout_prob', 0.15) if _cfg_config else 0.15,
             "depth_encoding_mode": _mem_config.get('depth_encoding_mode', 'rbf') if _mem_config_path else 'rbf',
             "freeze_modules": _mem_config.get('freeze', None) if _mem_config_path else None,
+            "mem_logit_modulation": _mem_config.get('mem_logit_modulation', False) if _mem_config else False,
+            "mem_logit_gate_modulation": _mem_config.get('mem_logit_gate_modulation', False) if _mem_config else False,
         }
 
         # 打印成格式化的 JSON 形式
@@ -230,6 +231,8 @@ class ABACUSTDesigner(nn.Module):
                             cfg_dropout_prob=_cfg_config.get('dropout_prob', 0.15) if _cfg_config else 0.15,
                             depth_encoding_mode=_mem_config.get('depth_encoding_mode', 'rbf') if _mem_config_path else 'rbf',
                             freeze_modules=_mem_config.get('freeze', None) if _mem_config_path else None,
+                            mem_logit_gate_modulation=_mem_config.get('mem_logit_gate_modulation', False) if _mem_config else False,
+                            mem_logit_modulation=_mem_config.get('mem_logit_modulation', False) if _mem_config else False,
                             )
 
         # self.abacust.eval()

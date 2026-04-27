@@ -21,6 +21,7 @@ log_dir/
 *.npy
 *.npz
 *.bin
+*.png
 
 # Protein/Structure files
 *.pdb
