@@ -1,0 +1,51 @@
+# ============================================================
+# mem_logit_modulation 专用配置
+# 主干全freeze，仅 NormalEncoder(rbf) + mem_logit_bias 可训练
+# ============================================================
+
+depth_encoding_mode: rbf
+
+membrane_inject:
+  mem_net_add:
+    enabled: false
+
+  mem_net_concat:
+    enabled: false
+
+  adaln:
+    enabled: false
+
+  cross_attn:
+    enabled: false
+
+cfg:
+  enabled: false
+
+mem_logit_modulation: true
+mem_logit_gate_modulation: true
+
+freeze:
+  - features
+  - W_e
+  - W_s
+  - encoder_layers
+  - decoder_layers
+  - W_out
+  - sc_decoder
+  - aux_scEnc
+  - activate_W_sc_node
+  - activate_W_sc_edge
+  - activate_W_sc_merge_edge
+  - h_V_segment
+  - prot_encoder_pifold
+  - W_esm_LN
+  - W_esm_act
+  - W_c
+  - unimol_repr_activate
+  - lig_plip_itype_embedding
+  - lig_encoder
+  - mem_net
+
+aa_loss_weights:
+  W: 2.0
+  Y: 2.0
