@@ -968,24 +968,7 @@ def main(args):
                             mem_bg_weight=args.mem_bg_weight,
                             )
 
-                        if os.environ.get('ABACUST_MEM_DEBUG_DUMP', '0') == '1' and design_ctx.get('mem_logit_debug') is not None:
-                            debug_dump_path = f'{subdir}/{data_name}_{index}_mem_logit_debug.pt'
-                            debug_payload = {
-                                'meta': {
-                                    'data_name': data_name,
-                                    'checkpoint': args.checkpoint,
-                                    'tm_raw': args.tm_raw,
-                                    'suffix': args.suffix,
-                                    'iter_num': iter_num,
-                                    'temperature': temperature,
-                                    'batchsize': batchsize,
-                                    'single_batchsize': single_batchsize,
-                                    'epoch_index': index,
-                                },
-                                'entries': design_ctx['mem_logit_debug'],
-                            }
-                            torch.save(debug_payload, debug_dump_path)
-                            logging.info(f' mem logit debug has been saved in {debug_dump_path}')
+
 
                         iter_seq_list = design_ctx['aatype']
                         chain_mask = batch['chainidx']

@@ -356,7 +356,7 @@ class ABACUSTDesigner(nn.Module):
 
 
 
-                logits, src_token, log_sc_logits, prev_torsion_mask, pdbtm_regions_mask,edge_mem_mask = self.abacust(
+                logits, src_token, log_sc_logits, prev_torsion_mask, pdbtm_regions_mask, edge_mem_mask, gate = self.abacust(
                     merged_coords,
                     merged_s,
                     merged_mask,
@@ -421,7 +421,7 @@ class ABACUSTDesigner(nn.Module):
 
         cur_prev_tokens = make_prev_token_from_t(cur_timestep, self.T, B, L, merged_lig_mask, device, output_scores_mask, merged_s)#去掉不准的氨基酸
 
-        logits, src_token, log_sc_logits, prev_torsion_mask, pdbtm_regions_mask,edge_mem_mask = self.abacust(
+        logits, src_token, log_sc_logits, prev_torsion_mask, pdbtm_regions_mask, edge_mem_mask, gate = self.abacust(
             merged_coords, merged_s, merged_mask, merged_chain_mask, merged_residue_idx, merged_chain_encoding_all, randn,
             lig_node_attr, lig_edge_attr, lig_edge_index,
             pdbtm_regions,
@@ -442,8 +442,9 @@ class ABACUSTDesigner(nn.Module):
 
         sample_cfgs = {
             "weight": weight,
-            "edge_mem_mask":edge_mem_mask
-            }
+            "edge_mem_mask": edge_mem_mask,
+            "gate": gate.detach().cpu() if gate is not None else None,
+        }
 
         return logits, src_token, log_sc_logits, prev_torsion_mask, pdbtm_regions_mask,sample_cfgs
 
