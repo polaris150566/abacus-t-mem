@@ -68,14 +68,14 @@ class NormalEncoder(nn.Module):
             if is_null.any():
                 y_emb = y_emb.clone()
                 y_emb[is_null] = 0.0
-            return y_emb, abs_depth, signed_depth
+            return {"y_emb": y_emb, "abs_depth": abs_depth, "signed_depth": signed_depth, "rbf_raw": depth_rbf}
 
         else:  # region_embedding
             is_null = half_thickness < 1e-3  # [B]
             if is_null.all():
                 y_emb = torch.zeros(X.shape[0], X.shape[1], self.region_embedding.embedding_dim, device=X.device, dtype=X.dtype)
                 region_ids = torch.full(interface_offset.shape, -1, dtype=torch.long, device=X.device)
-                return y_emb, region_ids, signed_depth
+                return {"y_emb": y_emb, "region_ids": region_ids, "signed_depth": signed_depth}
 
             region_ids = torch.ones_like(interface_offset, dtype=torch.long)  # 1 = transmembrane
             region_ids[interface_offset < self.tm_inner_bound] = 0            # 0 = membrane inner
@@ -84,7 +84,7 @@ class NormalEncoder(nn.Module):
             if is_null.any():
                 y_emb[is_null] = 0.0
                 region_ids[is_null] = -1
-            return y_emb, region_ids, signed_depth
+            return {"y_emb": y_emb, "region_ids": region_ids, "signed_depth": signed_depth}
 
 
 def interface_offset_rbf_encoding(distance, num_centers=20):

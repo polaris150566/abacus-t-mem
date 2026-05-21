@@ -24,32 +24,22 @@ PDB_PATH_LIST="${RUN_LIST_DIR}/pdb_paths.txt"
 TARGET_ID_LIST="${RUN_LIST_DIR}/target_ids.txt"
 
 CHECKPOINTS=(
-  /home/chenty/abacust_mem/src/experiments/abacust_mem_zero_with_0124_cluster_dict_b64_lr25/checkpoints/checkpoint80.pt
-  /home/chenty/abacust_mem/src/experiments/abacust_mem_zero_with_0124_cluster_dict_b64_lr25/checkpoints/checkpoint90.pt
-  /home/chenty/abacust_mem/src/experiments/abacust_mem_zero_with_0124_cluster_dict_b64_lr25/checkpoints/checkpoint100.pt
+  /home/chenty/abacust_mem/src/experiments/abacust_mem_zero_with_0124_cluster_dict_b64_lr25/checkpoint/checkpoint70.pt
 )
 
 TM_RAWS=(
-  zero_with_0124_cluster_dict_b64_lr25
-  zero_with_0124_cluster_dict_b64_lr25
   zero_with_0124_cluster_dict_b64_lr25
 )
 
 DEVICE_LISTS=(
   1
-  4
-  6
 )
 
 MEM_CONFIGS=(
   ""
-  ""
-  ""
 )
 
 CFG_SCALES=(
-  1.0
-  1.0
   1.0
 )
 

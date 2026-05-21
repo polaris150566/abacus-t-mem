@@ -1,6 +1,6 @@
 # ============================================================
-# mem_logit_modulation 专用配置
-# 主干全freeze，仅 NormalEncoder(rbf) + mem_logit_bias 可训练
+# mem_logit_gate_only 专用配置
+# 主干全freeze，仅 NormalEncoder(rbf) + mem_logit_gate/rbf_proj 可训练
 # ============================================================
 
 depth_encoding_mode: rbf
@@ -21,7 +21,7 @@ membrane_inject:
 cfg:
   enabled: false
 
-mem_logit_modulation: true
+mem_logit_modulation: false
 mem_logit_gate_modulation: true
 
 freeze:
@@ -48,4 +48,4 @@ freeze:
 
 aa_loss_weights:
   W: 2.0
-  Y: 2.0
+  Y: 3.0

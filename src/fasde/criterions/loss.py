@@ -2,6 +2,7 @@ import logging
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any, Dict, List
+import os
 
 import numpy as np
 
@@ -403,9 +404,21 @@ class DiffFullAtomCriterion(FairseqCriterion):
                 'nsentences': batch_size,                        # int
                 'weight':weight.float().mean().item(),
                 'wy_recall': wy_recall.detach().cpu().item(),
+                'gate_mean': sample_cfgs.get('gate').mean().item() if sample_cfgs.get('gate') is not None else None,
             }
             #使得reduced——loss张量的数据类型和logits一致
             reduced_loss = reduced_loss.type_as(logits)
+            if os.environ.get('DEBUG_GNORM'):
+                def _make_hook(n):
+                    def _hook(grad):
+                        import sys
+                        msg = f'DEBUG_GNORM: {n} grad=None' if grad is None else f'DEBUG_GNORM: {n} grad_norm={grad.norm().item():.10f}'
+                        print(msg, file=sys.stderr, flush=True)
+                        return grad
+                    return _hook
+                for _n, _p in model.named_parameters():
+                    if 'mem_logit' in _n:
+                        _p.register_hook(_make_hook(_n))
             # import ipdb; ipdb.set_trace()
 
 
@@ -449,6 +462,9 @@ class DiffFullAtomCriterion(FairseqCriterion):
         metrics.log_scalar("weight", torsion_acc_sum/node_num, 1, round=4)
         wy_recall_sum = sum(log.get("wy_recall", 0) for log in logging_outputs)
         metrics.log_scalar("wy_recall", wy_recall_sum/node_num, 1, round=4)
+        gate_vals = [log.get("gate_mean") for log in logging_outputs if log.get("gate_mean") is not None]
+        if gate_vals:
+            metrics.log_scalar("gate_mean", sum(gate_vals)/len(gate_vals), 1, round=4)
 
 
 
