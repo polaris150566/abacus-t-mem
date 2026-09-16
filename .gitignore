@@ -46,12 +46,17 @@ src/experiments/
 src/data/data_storage/
 src/data/raw_data/
 src/data/tmAFDB_data/
+auxiliary_test/
 
 # IDE
 .idea/
 .vscode/
 *.swp
 *.swo
+*.csv
+*.txt
+*.yaml
+*.sh
 
 # OS
 .DS_Store

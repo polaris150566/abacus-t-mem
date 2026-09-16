@@ -37,6 +37,7 @@ from .alphafold.common.protein import from_pdb_string
 from esm import pretrained
 
 from .normal_encoder_single_rbf import NormalEncoder  #对膜的位置进行编码，之后直接嵌入节点中
+from .normal_encoder_single_rbf import virtual_cb_from_backbone, interface_offset_rbf_encoding
 import traceback
 import logging
 logger = logging.getLogger(__file__)
@@ -533,7 +534,7 @@ class PositionWiseFeedForward(nn.Module):
 
 
 class MembraneNet(nn.Module):
-    def __init__(self, hidden_dim, num_centers=20, tm_raw='raw', mem_between_mode='none', dropout=0.1, tm_raw_encoding_mode='rbf'):
+    def __init__(self, hidden_dim, num_centers=20, tm_raw='raw', mem_between_mode='none', dropout=0.1):
         super().__init__()
         self.hidden_dim = hidden_dim
         self.num_centers = num_centers
@@ -557,7 +558,6 @@ class MembraneNet(nn.Module):
                 theta_output_dim=hidden_dim,
                 num_centers=self.num_centers,
                 mem_between_mode=self.mode,
-                encoding_mode=tm_raw_encoding_mode,
             )
 
         if self.mode == 'concat':
@@ -612,6 +612,63 @@ class MembraneNet(nn.Module):
             return h_V + self.dropout(self.concat_proj(fused)) * mask
 
         return h_V
+
+
+class MemEdgeEncoder(nn.Module):
+    """把膜的深度(depth)+角度(theta)信息过一个基础 MLP 映射到 out_dim 维的逐残基嵌入,
+    之后广播到 decoder 的边特征 h_ESV 后面一起随 decoder 传输。"""
+    def __init__(self, out_dim=16, hidden_dim=32, num_centers=20,
+                 abs_depth_noise_std=0.5, theta_noise_std_degrees=10.0):
+        super().__init__()
+        self.eps = 1e-6
+        self.out_dim = int(out_dim)
+        self.num_centers = int(num_centers)
+        self.abs_depth_noise_std = float(abs_depth_noise_std)
+        self.theta_noise_std_degrees = float(theta_noise_std_degrees)
+        # 输入 = [depth RBF(num_centers) | sin(theta), cos(theta)]
+        self.mlp = nn.Sequential(
+            nn.Linear(self.num_centers + 2, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, self.out_dim),
+        )
+
+    def forward(self, X, G, N, prot_mask):
+        if G is None or N is None:
+            return torch.zeros(X.shape[0], X.shape[1], self.out_dim, device=X.device, dtype=X.dtype)
+        G = G.to(device=X.device, dtype=X.dtype)
+        N = N.to(device=X.device, dtype=X.dtype)
+        gr = G[:, :, :3]
+        gt = G[:, :, 3:]
+        ca = X[:, :, 1, :]
+        r_mem = torch.bmm(gr, (ca + gt.transpose(1, 2)).transpose(1, 2)).transpose(1, 2)
+        half_thickness = N.norm(dim=-1).clamp(min=self.eps)
+        unit_normal = N / half_thickness.unsqueeze(-1)
+        signed_depth = (r_mem * unit_normal.unsqueeze(1)).sum(dim=-1)
+        abs_depth = signed_depth.abs()
+        if self.training and self.abs_depth_noise_std > 0:
+            abs_depth = (abs_depth + torch.randn_like(abs_depth) * self.abs_depth_noise_std).clamp_min(0.0)
+        interface_offset = abs_depth - half_thickness.unsqueeze(1)
+        n_atom = X[:, :, 0, :]
+        c_atom = X[:, :, 2, :]
+        virtual_cb = virtual_cb_from_backbone(n_atom, ca, c_atom)
+        ca_to_cb = virtual_cb - ca
+        ca_to_cb = ca_to_cb / ca_to_cb.norm(dim=-1, keepdim=True).clamp(min=self.eps)
+        outward_sign = torch.where(signed_depth >= 0, torch.ones_like(signed_depth), -torch.ones_like(signed_depth))
+        outward_normal = unit_normal.unsqueeze(1) * outward_sign.unsqueeze(-1)
+        cos_theta = (ca_to_cb * outward_normal).sum(dim=-1).clamp(-1.0, 1.0)
+        theta = torch.acos(cos_theta)
+        if self.training and self.theta_noise_std_degrees > 0:
+            theta_noise_std = theta.new_tensor(self.theta_noise_std_degrees * 3.141592653589793 / 180.0)
+            theta = (theta + torch.randn_like(theta) * theta_noise_std).clamp(min=0.0, max=3.141592653589793)
+        depth_rbf = interface_offset_rbf_encoding(interface_offset, num_centers=self.num_centers)
+        theta_feats = torch.stack([torch.sin(theta), torch.cos(theta)], dim=-1)
+        feats = torch.cat([depth_rbf, theta_feats], dim=-1)
+        emb = self.mlp(feats)
+        is_null = half_thickness < 1e-3
+        if is_null.any():
+            emb = emb.clone()
+            emb[is_null] = 0.0
+        return emb * prot_mask[..., None]
 
 
 class PositionalEncodings(nn.Module):
@@ -1132,10 +1189,12 @@ class ABACUST(nn.Module):
         cross_attn_num_heads=4,
         cfg_enabled=False,
         cfg_dropout_prob=0.15,
-        depth_encoding_mode='rbf',
         freeze_modules=None,
         mem_logit_modulation=False,
         mem_logit_gate_modulation=False,
+        mem_logit_gate_zero_encoder=False,
+        mem_logit_normal_encoder_zero_region_embedding=False,
+        mem_edge_dim=0,
         ):
         super(ABACUST, self).__init__()
 
@@ -1161,19 +1220,24 @@ class ABACUST(nn.Module):
         self.num_centers = num_centers
         self.tm_raw = tm_raw  #是否禁用pdbtm的嵌入标记
         self.mem_between_mode = mem_between_mode
+        self.mem_edge_dim = int(mem_edge_dim)
+        self.mem_edge_encoder = MemEdgeEncoder(out_dim=self.mem_edge_dim) if self.mem_edge_dim > 0 else None
         self.depth_inject_method = depth_inject_method
         self.depth_cond_dim = depth_cond_dim
-        self.depth_encoding_mode = depth_encoding_mode
         self.cfg_enabled = cfg_enabled
         self.cfg_dropout_prob = cfg_dropout_prob
         self.mem_logit_modulation = mem_logit_modulation
         self.mem_logit_gate_modulation = mem_logit_gate_modulation
+        self.mem_logit_gate_zero_encoder = mem_logit_gate_zero_encoder
+        self.mem_logit_normal_encoder_zero_region_embedding = mem_logit_normal_encoder_zero_region_embedding
         self._use_tm_depth = 'depth' in self.tm_raw
         self._use_tm_theta = 'theta' in self.tm_raw
         self._use_tm_any = self._use_tm_depth or self._use_tm_theta or mem_logit_modulation or mem_logit_gate_modulation
         logger.info(f"self.tm_raw:{tm_raw}" )
         logger.info(f"self.mem_between_mode:{mem_between_mode}")
         logger.info(f"tm flags depth/theta: {self._use_tm_depth}/{self._use_tm_theta}")
+        logger.info(f"mem_logit_gate_zero_encoder: {self.mem_logit_gate_zero_encoder}")
+        logger.info(f"mem_logit_normal_encoder_zero_region_embedding: {self.mem_logit_normal_encoder_zero_region_embedding}")
 
         if pre_prot_embed:
             if encode_mpnn:
@@ -1221,29 +1285,33 @@ class ABACUST(nn.Module):
             EncLayer(hidden_dim, hidden_dim*2, dropout=dropout)
             for _ in range(num_encoder_layers)
         ])
+        self.mem_logit_gate_encoder_layers = None
+        if mem_logit_gate_modulation:
+            self.mem_logit_gate_encoder_layers = copy.deepcopy(self.encoder_layers)
 
         # Decoder layers
+        # decoder 边输入维度 = 3*hidden + mem_edge_dim (膜信息 concat 到 h_ESV 后面)
+        dec_edge_in = hidden_dim*3 + self.mem_edge_dim
         if self.depth_inject_method == 'adaln':
             self.decoder_layers = nn.ModuleList([
-                AdaLNDecLayer(hidden_dim, hidden_dim*3, cond_dim=depth_cond_dim, dropout=dropout)
+                AdaLNDecLayer(hidden_dim, dec_edge_in, cond_dim=depth_cond_dim, dropout=dropout)
                 for _ in range(num_decoder_layers)
             ])
         elif self.depth_inject_method == 'cross_attn':
             self.decoder_layers = nn.ModuleList([
-                CrossAttnDecLayer(hidden_dim, hidden_dim*3, cond_dim=depth_cond_dim,
+                CrossAttnDecLayer(hidden_dim, dec_edge_in, cond_dim=depth_cond_dim,
                                   num_heads=cross_attn_num_heads, dropout=dropout)
                 for _ in range(num_decoder_layers)
             ])
         else:
             self.decoder_layers = nn.ModuleList([
-                DecLayer(hidden_dim, hidden_dim*3, dropout=dropout)
+                DecLayer(hidden_dim, dec_edge_in, dropout=dropout)
                 for _ in range(num_decoder_layers)
             ])
         if self.depth_inject_method != 'none':
             self.depth_encoder = AdaLNNormalEncoder(
                 y_output_dim=depth_cond_dim,
                 num_centers=depth_num_rbf_centers,
-                encoding_mode=depth_encoding_mode,
             )
         # self.W_out = nn.Linear(hidden_dim, num_letters, bias=True)
         self.W_out = nn.Sequential(
@@ -1255,7 +1323,7 @@ class ABACUST(nn.Module):
         self.mem_logit_bias = None
         self.mem_logit_normal_encoder = None
         self.mem_logit_gate = None
-        self.mem_logit_rbf_proj = None
+        self.mem_logit_distribution_projection = None
         if self._use_tm_any:
             self.mem_net = MembraneNet(
                 self.hidden_dim,
@@ -1263,7 +1331,6 @@ class ABACUST(nn.Module):
                 tm_raw=self.tm_raw,
                 mem_between_mode=self.mem_between_mode,
                 dropout=dropout,
-                tm_raw_encoding_mode=self.depth_encoding_mode,
             )
         if mem_logit_modulation or mem_logit_gate_modulation:
             self.mem_logit_normal_encoder = NormalEncoder(
@@ -1273,7 +1340,7 @@ class ABACUST(nn.Module):
                 theta_output_dim=hidden_dim,
                 num_centers=self.num_centers,
                 mem_between_mode='none',
-                encoding_mode=self.depth_encoding_mode,
+                zero_region_embedding=self.mem_logit_normal_encoder_zero_region_embedding,
             )
 
         if mem_logit_modulation:
@@ -1289,11 +1356,11 @@ class ABACUST(nn.Module):
             self.mem_logit_gate = nn.Linear(hidden_dim * 2, 1, bias=True)
             nn.init.zeros_(self.mem_logit_gate.weight)
             nn.init.zeros_(self.mem_logit_gate.bias)
-            self.mem_logit_rbf_proj = nn.Linear(self.num_centers, num_letters, bias=True)
-            nn.init.kaiming_uniform_(self.mem_logit_rbf_proj.weight, a=5 ** 0.5)
-            fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.mem_logit_rbf_proj.weight)
+            self.mem_logit_distribution_projection = nn.Linear(hidden_dim, num_letters, bias=True)
+            nn.init.kaiming_uniform_(self.mem_logit_distribution_projection.weight, a=5 ** 0.5)
+            fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.mem_logit_distribution_projection.weight)
             bound = 1 / fan_in ** 0.5 if fan_in > 0 else 0
-            nn.init.uniform_(self.mem_logit_rbf_proj.bias, -bound, bound)
+            nn.init.uniform_(self.mem_logit_distribution_projection.bias, -bound, bound)
 
 
         self.sc_decoder = SideChainDecoder(
@@ -1352,6 +1419,16 @@ class ABACUST(nn.Module):
         return frozen_params
 
     def _freeze_by_config(self, module_names):
+        # 支持两种格式:
+        #   1) list  : 冻结列出的模块 (旧行为)
+        #   2) dict {mode: all_except, keep: [...]} : 只训练 keep 里的顶层模块, 其余全部冻结
+        if isinstance(module_names, dict):
+            mode = module_names.get('mode', '')
+            if mode == 'all_except':
+                self._freeze_all_except(module_names.get('keep', []))
+            else:
+                logger.warning(f"freeze config: unknown mode '{mode}', skipping")
+            return
         frozen_total = 0
         for name in module_names:
             module = getattr(self, name, None)
@@ -1360,6 +1437,28 @@ class ABACUST(nn.Module):
             else:
                 logger.warning(f"freeze config: module '{name}' not found in ABACUST, skipping")
         logger.info(f'freeze_by_config total frozen params: {frozen_total:,}')
+
+    def _freeze_all_except(self, keep_names):
+        keep = set(keep_names)
+        frozen_total = 0
+        kept_total = 0
+        for name, param in self.named_parameters():
+            top = name.split('.')[0]
+            if top in keep:
+                kept_total += param.numel()
+            else:
+                if param.requires_grad:
+                    param.requires_grad = False
+                    frozen_total += param.numel()
+        logger.info(f'freeze_all_except keep={sorted(keep)} | frozen={frozen_total:,} trainable_kept={kept_total:,}')
+
+    def initialize_mem_logit_gate_encoder_from_encoder(self):
+        if self.mem_logit_gate_encoder_layers is None:
+            return
+        self.mem_logit_gate_encoder_layers.load_state_dict(self.encoder_layers.state_dict())
+        for param in self.mem_logit_gate_encoder_layers.parameters():
+            param.requires_grad = True
+        logger.info("initialized mem_logit_gate_encoder_layers from encoder_layers")
 
 
     # def _freeze_esm_parameter(self, ):
@@ -1484,11 +1583,31 @@ class ABACUST(nn.Module):
         mask_attend = mask.unsqueeze(-1) * mask_attend
         # 真正的encoderlayer
         ###############################################################################################
+        mem_logit_y_emb = None
+        if self.mem_logit_modulation or self.mem_logit_gate_modulation:
+            assert self.mem_logit_normal_encoder is not None, "missing logit encoder"
+            result = self.mem_logit_normal_encoder(X, G, N)
+            mem_logit_y_emb = result["y_emb"]
+            mem_logit_y_emb = mem_logit_y_emb.to(dtype=h_V.dtype) * prot_mask[..., None]
+
+        mem_logit_gate_h_V = None
+        if self.mem_logit_gate_modulation:
+            assert self.mem_logit_gate_encoder_layers is not None, "missing logit gate encoder"
+            assert mem_logit_y_emb is not None, "missing logit normal encoder output"
+            mem_logit_gate_h_V = h_V + mem_logit_y_emb
+            mem_logit_gate_h_E = h_E
+            for layer in self.mem_logit_gate_encoder_layers:
+                mem_logit_gate_h_V, mem_logit_gate_h_E = layer(
+                    mem_logit_gate_h_V, mem_logit_gate_h_E, E_idx, mask, mask_attend
+                )
+            if self.mem_logit_gate_zero_encoder:
+                mem_logit_gate_h_V = torch.zeros_like(mem_logit_gate_h_V)
         for layer in self.encoder_layers:
             h_V, h_E = layer(h_V, h_E, E_idx, mask, mask_attend)
         # 注入膜信息用于编码（encoder之后）
         if self.mem_net is not None:
             h_V = self.mem_net(h_V, X, G, N, prot_mask)
+
         #################################################################################################
         # 通过mask确定解码顺序，因为是nar，所以可见。
         # prev_token不用给mask，因为abacust_mem/src/fasde/modules/sequence_designer.py输入的时候就已经mask过了，但是torsion要额外给mask
@@ -1570,25 +1689,24 @@ class ABACUST(nn.Module):
         if self.depth_inject_method != 'none':
             adaln_depth_cond, _, _ = self.depth_encoder(X, G, N)
 
+        # 膜信息(深度+角度)过基础MLP -> mem_edge_dim, 广播到每条边并拼到 h_ESV 后面
+        mem_edge = None
+        if self.mem_edge_encoder is not None:
+            mem_node = self.mem_edge_encoder(X, G, N, prot_mask)
+            mem_edge = mem_node.unsqueeze(2).expand(-1, -1, E_idx.shape[-1], -1)
+
         for layer in self.decoder_layers:
             # Masked positions attend to encoder information, unmasked see.
             h_ESCV = cat_neighbors_nodes(h_V, h_ESC, E_idx) # 2 * hidden
             h_ESV = mask_bw * (h_ESCV) + h_EXV_encoder_fw
+            if mem_edge is not None:
+                h_ESV = torch.cat([h_ESV, mem_edge], -1)
             if self.depth_inject_method != 'none':
                 h_V = layer(h_V, h_ESV, adaln_depth_cond, mask)
             else:
                 h_V = layer(h_V, h_ESV, mask)
 
         logits = self.W_out(h_V)
-
-        mem_logit_y_emb = None
-        mem_logit_raw_rbf = None
-        if self.mem_logit_modulation or self.mem_logit_gate_modulation:
-            assert self.mem_logit_normal_encoder is not None, "missing logit encoder"
-            result = self.mem_logit_normal_encoder(X, G, N)
-            mem_logit_y_emb = result["y_emb"]
-            mem_logit_raw_rbf = result.get("rbf_raw", None)
-            mem_logit_y_emb = mem_logit_y_emb.to(dtype=h_V.dtype) * prot_mask[..., None]
 
         if self.mem_logit_modulation:
             assert self.mem_logit_bias is not None, "missing logit bias"
@@ -1599,12 +1717,11 @@ class ABACUST(nn.Module):
 
         if self.mem_logit_gate_modulation:
             assert self.mem_logit_gate is not None, "missing logit gate"
-            assert self.mem_logit_rbf_proj is not None, "missing rbf projection"
-            probs = log_probs.exp()
-            gate = torch.sigmoid(self.mem_logit_gate(torch.cat([h_V, mem_logit_y_emb], dim=-1)))
-            rbf_dist = F.softmax(self.mem_logit_rbf_proj(mem_logit_raw_rbf), dim=-1)
-            probs = (1 - gate) * probs + gate * rbf_dist
-            log_probs = torch.log(probs)
+            assert self.mem_logit_distribution_projection is not None, "missing membrane distribution projection"
+            gate = torch.sigmoid(self.mem_logit_gate(torch.cat([mem_logit_gate_h_V, mem_logit_y_emb], dim=-1)))
+            membrane_logits = self.mem_logit_distribution_projection(mem_logit_y_emb)
+            logits = logits + gate * membrane_logits
+            log_probs = F.log_softmax(logits, dim=-1)
 
         #########################################################
         # self.region_decoder = RegionDecoder(d_in=self.hidden_dim *4)
@@ -1742,6 +1859,24 @@ class ABACUST(nn.Module):
         # Encoder is unmasked self-attention
         mask_attend = gather_nodes(mask.unsqueeze(-1),  E_idx).squeeze(-1)
         mask_attend = mask.unsqueeze(-1) * mask_attend
+        _mem_logit_y_emb = None
+        if (self.mem_logit_modulation or self.mem_logit_gate_modulation) and G is not None and N is not None:
+            result = self.mem_logit_normal_encoder(X, G, N)
+            _mem_logit_y_emb = result["y_emb"]
+            _mem_logit_y_emb = _mem_logit_y_emb.to(dtype=h_V.dtype) * prot_mask[..., None]
+
+        mem_logit_gate_h_V_init = None
+        if self.mem_logit_gate_modulation:
+            assert self.mem_logit_gate_encoder_layers is not None, "missing logit gate encoder"
+            assert _mem_logit_y_emb is not None, "missing logit normal encoder output"
+            mem_logit_gate_h_V_init = h_V + _mem_logit_y_emb
+            mem_logit_gate_h_E_init = h_E
+            for layer in self.mem_logit_gate_encoder_layers:
+                mem_logit_gate_h_V_init, mem_logit_gate_h_E_init = layer(
+                    mem_logit_gate_h_V_init, mem_logit_gate_h_E_init, E_idx, mask, mask_attend
+                )
+            if self.mem_logit_gate_zero_encoder:
+                mem_logit_gate_h_V_init = torch.zeros_like(mem_logit_gate_h_V_init)
         for layer in self.encoder_layers:
             h_V, h_E = layer(h_V, h_E, E_idx, mask, mask_attend)
         # CFG: save pre-membrane encoder output for unconditional path
@@ -1782,13 +1917,6 @@ class ABACUST(nn.Module):
         cur_iter_torsion_mask = torch.zeros((B, L, 4)).float().to(device)
         # if side-chain packing only, then cur_iter_torsion is None
         # Pre-compute mem_logit_y_emb (structure-only, no need to recompute each iter)
-        _mem_logit_y_emb = None
-        _raw_rbf = None
-        if (self.mem_logit_modulation or self.mem_logit_gate_modulation) and G is not None and N is not None:
-            result = self.mem_logit_normal_encoder(X, G, N)
-            _mem_logit_y_emb = result["y_emb"]
-            _raw_rbf = result.get("rbf_raw", None)
-            _mem_logit_y_emb = _mem_logit_y_emb.to(dtype=prot_mask.dtype) * prot_mask[..., None]
         _debug_mem_logit_dump = os.environ.get("ABACUST_MEM_DEBUG_DUMP", "0") == "1"
         _mem_logit_debug = [] if _debug_mem_logit_dump else None
         for cur_iter_num in range(iter_num):
@@ -1870,10 +1998,18 @@ class ABACUST(nn.Module):
             if self.depth_inject_method != 'none':
                 adaln_depth_cond, _, _ = self.depth_encoder(X, G, N)
 
+            # 膜信息(深度+角度) -> mem_edge_dim, 广播到边并拼到 h_ESV 后面
+            mem_edge = None
+            if self.mem_edge_encoder is not None:
+                mem_node = self.mem_edge_encoder(X, G, N, prot_mask)
+                mem_edge = mem_node.unsqueeze(2).expand(-1, -1, E_idx.shape[-1], -1)
+
             for layer in self.decoder_layers:
                 # Masked positions attend to encoder information, unmasked see.
                 h_ESCV = cat_neighbors_nodes(h_V, h_ESC, E_idx)
                 h_ESV = mask_bw * h_ESCV + h_EXV_encoder_fw
+                if mem_edge is not None:
+                    h_ESV = torch.cat([h_ESV, mem_edge], -1)
                 if self.depth_inject_method != 'none':
                     h_V = layer(h_V, h_ESV, adaln_depth_cond, mask)
                 else:
@@ -1912,6 +2048,8 @@ class ABACUST(nn.Module):
                 for _lyr in self.decoder_layers:
                     _h_ESCV_u = cat_neighbors_nodes(_h_V_u, _h_ESC_u, E_idx)
                     _h_ESV_u = mask_bw * _h_ESCV_u + _h_EXV_fw_u
+                    if mem_edge is not None:
+                        _h_ESV_u = torch.cat([_h_ESV_u, mem_edge], -1)
                     if self.depth_inject_method != 'none':
                         _h_V_u = _lyr(_h_V_u, _h_ESV_u, _cfg_adaln_uncond, mask)
                     else:
@@ -1929,17 +2067,18 @@ class ABACUST(nn.Module):
 
             _mem_logit_debug_item = None
             _probs_pre_gate = probs.detach().cpu() if _debug_mem_logit_dump else None
-            # mem_logit_gate_modulation: gate blend with rbf_dist
-            if self.mem_logit_gate_modulation and _mem_logit_y_emb is not None and _raw_rbf is not None:
-                _gate = torch.sigmoid(self.mem_logit_gate(torch.cat([h_V, _mem_logit_y_emb], dim=-1)))
-                _rbf_dist = F.softmax(self.mem_logit_rbf_proj(_raw_rbf), dim=-1)
-                probs = (1 - _gate) * probs + _gate * _rbf_dist
-                logits = torch.log(probs + 1e-8)
+            # mem_logit_gate_modulation: gate-scaled membrane logits
+            if self.mem_logit_gate_modulation and _mem_logit_y_emb is not None:
+                _gate = torch.sigmoid(self.mem_logit_gate(torch.cat([mem_logit_gate_h_V_init, _mem_logit_y_emb], dim=-1)))
+                _membrane_logits = self.mem_logit_distribution_projection(_mem_logit_y_emb)
+                logits = logits + _gate * _membrane_logits
+                probs = F.softmax(logits, dim=-1)
                 if _debug_mem_logit_dump:
+                    _membrane_distribution = F.softmax(_membrane_logits, dim=-1)
                     _mem_logit_debug_item = {
                         "iter": int(cur_iter_num),
                         "gate": _gate.detach().cpu(),
-                        "rbf_dist": _rbf_dist.detach().cpu(),
+                        "membrane_distribution": _membrane_distribution.detach().cpu(),
                         "probs_pre_gate": _probs_pre_gate,
                         "probs_post_gate": probs.detach().cpu(),
                     }

@@ -2,7 +2,7 @@
 # ------------- 通用变量 -------------
 DATA_DIR="/home/chenty/abacust_mem/src/fasde/data"
 # tm_raw='raw_esm2_uniprotkb_pdbtm_merged_lora650M_tmdet1'
-tm_raw="zero_afdb_with_0223_cluster_dict_1_3_b64"
+tm_raw="zero_afdb_with_0124afdb_cluster_dict_1_3_b64"
 # 决定权重的加载和保存
 # CKPT='/home/chenty/abacust_mem/src/experiments/abacust/checkpoint/checkpoint_best_mem_raw650M.pt'
 CKPT='/home/chenty/abacust_mem/src/experiments/abacust_mem_zero/checkpoints/checkpoint_best_noise650M.pt'
@@ -32,9 +32,9 @@ SEED=42
 
 CONFIG_YAML="config.yaml"
 MAX_PROTEIN_SEQUENCE_LEN=256
-PDB_PATH="/home/chenty/abacust_mem/src/data/data_storage/assembled_pdbs/"
-PDBTM_PATH='/home/chenty/abacust_mem/src/data/data_storage/tmdet_result/npys/'
-NPY_PATH='/home/chenty/abacust_mem/src/data/data_storage/merged_npys/all_npy'
+PDB_PATH="/home/chenty/public_data/abacust_mem_data/data_storage/assembled_pdbs/"
+PDBTM_PATH='/home/chenty/public_data/abacust_mem_data/data_storage/tmdet_result/npys/'
+NPY_PATH='/home/chenty/public_data/abacust_mem_data/data_storage/merged_npys/all_npy'
 
 DIFF_T=40
 MAX_ITER_NUM=4
@@ -96,9 +96,9 @@ run_training() {
             --ckpt $CKPT \
             --afdb \
             --pdb_ratio 0.25 \
-            --afdb_npy_path "/home/chenty/abacust_mem/src/data/tmAFDB_data/npys/all_npy" \
-            --afdb_list_path "/home/chenty/abacust_mem/src/data/tmAFDB_data/Nonredundant_merged_cluster_dict.npy" \
-            --afdb_tmdet_npy_path "/home/chenty/abacust_mem/src/data/tmAFDB_data/tm_npys" \
+            --afdb_npy_path "/home/chenty/public_data/abacust_mem_data/tmAFDB_data/npys/all_npy" \
+            --afdb_list_path "/home/chenty/public_data/abacust_mem_data/tmAFDB_data/Nonredundant_merged_cluster_dict.npy" \
+            --afdb_tmdet_npy_path "/home/chenty/public_data/abacust_mem_data/tmAFDB_data/tm_npys" \
             --afdb_apply_noise_prob 1 \
             --afdb_noise_sigma 0.2 \
             --tensorboard-logdir $SAVE_DIR/tensorboard \

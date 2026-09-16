@@ -165,6 +165,10 @@ class ABACUSTDesigner(nn.Module):
         else:
             _derived_depth_inject_method = 'none'
 
+        # 膜边特征注入: 把膜(深度+角度)嵌入 concat 到 decoder 边 h_ESV 后面
+        _mem_edge = _mi.get('mem_edge_concat', {})
+        _derived_mem_edge_dim = int(_mem_edge.get('dim', 16)) if _mem_edge.get('enabled', False) else 0
+
         _cli_tm_raw = args.tm_raw
         if _derived_use_depth and 'depth' not in _cli_tm_raw:
             _cli_tm_raw = 'depth_' + _cli_tm_raw
@@ -200,10 +204,12 @@ class ABACUSTDesigner(nn.Module):
             "cross_attn_num_heads": _cross_attn.get('num_heads', 4),
             "cfg_enabled": _cfg_config.get('enabled', False) if _cfg_config else False,
             "cfg_dropout_prob": _cfg_config.get('dropout_prob', 0.15) if _cfg_config else 0.15,
-            "depth_encoding_mode": _mem_config.get('depth_encoding_mode', 'rbf') if _mem_config_path else 'rbf',
             "freeze_modules": _mem_config.get('freeze', None) if _mem_config_path else None,
             "mem_logit_modulation": _mem_config.get('mem_logit_modulation', False) if _mem_config else False,
             "mem_logit_gate_modulation": _mem_config.get('mem_logit_gate_modulation', False) if _mem_config else False,
+            "mem_logit_gate_zero_encoder": _mem_config.get('mem_logit_gate_zero_encoder', False) if _mem_config else False,
+            "mem_logit_normal_encoder_zero_region_embedding": _mem_config.get('mem_logit_normal_encoder_zero_region_embedding', False) if _mem_config else False,
+            "mem_edge_dim": _derived_mem_edge_dim,
         }
 
         # 打印成格式化的 JSON 形式
@@ -229,10 +235,12 @@ class ABACUSTDesigner(nn.Module):
                             cross_attn_num_heads=_cross_attn.get('num_heads', 4),
                             cfg_enabled=_cfg_config.get('enabled', False) if _cfg_config else False,
                             cfg_dropout_prob=_cfg_config.get('dropout_prob', 0.15) if _cfg_config else 0.15,
-                            depth_encoding_mode=_mem_config.get('depth_encoding_mode', 'rbf') if _mem_config_path else 'rbf',
                             freeze_modules=_mem_config.get('freeze', None) if _mem_config_path else None,
                             mem_logit_gate_modulation=_mem_config.get('mem_logit_gate_modulation', False) if _mem_config else False,
                             mem_logit_modulation=_mem_config.get('mem_logit_modulation', False) if _mem_config else False,
+                            mem_logit_gate_zero_encoder=_mem_config.get('mem_logit_gate_zero_encoder', False) if _mem_config else False,
+                            mem_logit_normal_encoder_zero_region_embedding=_mem_config.get('mem_logit_normal_encoder_zero_region_embedding', False) if _mem_config else False,
+                            mem_edge_dim=_derived_mem_edge_dim,
                             )
 
         # self.abacust.eval()
@@ -253,9 +261,43 @@ class ABACUSTDesigner(nn.Module):
             model_weights = state["model"]
             model_weights = {k.replace('model.abacust.', ''): v for k, v in model_weights.items() \
                 if (k.startswith('model.abacust.') ) }
+            # 形状不一致的权重处理:
+            #   - decoder W1.weight 这类(仅输入列数增加, 如 512->528 因 mem_edge concat): 按列部分拷贝,
+            #     旧列保留预训练权重, 新增列 zero-init (膜信息作为增量, 起步贡献为0)
+            #   - 其余无法对齐的: 丢弃
+            _cur_sd = self.abacust.state_dict()
+            _partial, _skipped = [], []
+            for k in list(model_weights.keys()):
+                if k not in _cur_sd:
+                    continue
+                old_v = model_weights[k]
+                new_shape = _cur_sd[k].shape
+                if tuple(new_shape) == tuple(old_v.shape):
+                    continue
+                if (old_v.dim() == 2 and new_shape[0] == old_v.shape[0] and new_shape[1] >= old_v.shape[1]):
+                    merged = torch.zeros_like(_cur_sd[k])
+                    merged[:, :old_v.shape[1]] = old_v.to(merged.dtype)
+                    model_weights[k] = merged
+                    _partial.append((k, tuple(old_v.shape), tuple(new_shape)))
+                else:
+                    del model_weights[k]
+                    _skipped.append(k)
+            if _partial:
+                logger.info(f'partial column-copy {len(_partial)} keys (old cols kept, new cols zero-init): {_partial}')
+            if _skipped:
+                logger.info(f'skip {len(_skipped)} shape-mismatched pretrained keys: {_skipped}')
             self.abacust.load_state_dict(
                 model_weights, strict=False
             )
+            has_gate_encoder_weights = any(
+                key.startswith("mem_logit_gate_encoder_layers.") for key in model_weights
+            )
+            if (
+                getattr(self.abacust, "mem_logit_gate_modulation", False)
+                and getattr(self.abacust, "mem_logit_gate_encoder_layers", None) is not None
+                and not has_gate_encoder_weights
+            ):
+                self.abacust.initialize_mem_logit_gate_encoder_from_encoder()
 
         # Freeze logic is handled inside ABACUST.__init__ via freeze_modules param
 

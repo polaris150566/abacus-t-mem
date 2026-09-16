@@ -1,9 +1,7 @@
 # ============================================================
 # mem_logit_modulation 专用配置
-# 主干全freeze，仅 NormalEncoder(rbf) + mem_logit_bias 可训练
+# 主干全freeze，仅 NormalEncoder + mem_logit_bias 可训练
 # ============================================================
-
-depth_encoding_mode: rbf
 
 membrane_inject:
   mem_net_add:

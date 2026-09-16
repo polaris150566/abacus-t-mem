@@ -1,0 +1,1 @@
+from protein_utils.pdbtm_data_parser import Pdbtm_parser

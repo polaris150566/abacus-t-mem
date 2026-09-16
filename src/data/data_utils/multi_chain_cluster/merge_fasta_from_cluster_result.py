@@ -45,5 +45,5 @@ if __name__ == "__main__":
         query_file="query.fasta",
         target_file="target.fasta",
         # src_file="/home/chenty/abacust_mem/src/data_utils/data_process/data_storage/merged_cluster_dict.json"
-        src_file="/home/chenty/abacust_mem/src/data/data_storage/merged_cluster_dict.json"
+        src_file="/home/chenty/public_data/abacust_mem_data/data_storage/merged_cluster_dict.json"
     )

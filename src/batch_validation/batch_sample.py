@@ -210,9 +210,9 @@ def main():
     prot_dir = f"/home/chenty/public_data/{dataset}/source_data/pdbs"
 
     runs = [
-        {"checkpoint_path": "/home/chenty/abacust_mem/src/experiments/abacust_mem_zero_afdb_with_0223_cluster_dict_1_3_b48/checkpoint/checkpoint260.pt", "device_list": [0], "tm_raw": "zero_afdb_with_0223_cluster_dict_1_3_b48"},
-        {"checkpoint_path": "/home/chenty/abacust_mem/src/experiments/abacust_mem_zero_afdb_with_0223_cluster_dict_1_3_b48/checkpoint/checkpoint250.pt", "device_list": [5], "tm_raw": "zero_afdb_with_0223_cluster_dict_1_3_b48"},
-        {"checkpoint_path": "/home/chenty/abacust_mem/src/experiments/abacust_mem_zero_afdb_with_0223_cluster_dict_1_3_b48/checkpoint/checkpoint255.pt", "device_list": [6], "tm_raw": "zero_afdb_with_0223_cluster_dict_1_3_b48"},
+        {"checkpoint_path": "/home/chenty/abacust_mem/src/experiments/abacust_mem_zero_afdb_with_0124afdb_cluster_dict_1_3_b48/checkpoint/checkpoint260.pt", "device_list": [0], "tm_raw": "zero_afdb_with_0124afdb_cluster_dict_1_3_b48"},
+        {"checkpoint_path": "/home/chenty/abacust_mem/src/experiments/abacust_mem_zero_afdb_with_0124afdb_cluster_dict_1_3_b48/checkpoint/checkpoint250.pt", "device_list": [5], "tm_raw": "zero_afdb_with_0124afdb_cluster_dict_1_3_b48"},
+        {"checkpoint_path": "/home/chenty/abacust_mem/src/experiments/abacust_mem_zero_afdb_with_0124afdb_cluster_dict_1_3_b48/checkpoint/checkpoint255.pt", "device_list": [6], "tm_raw": "zero_afdb_with_0124afdb_cluster_dict_1_3_b48"},
     ]
 
     processes = []

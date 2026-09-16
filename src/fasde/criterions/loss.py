@@ -389,6 +389,13 @@ class DiffFullAtomCriterion(FairseqCriterion):
                 print(f"raw_loss: {raw_loss}")
 
             #
+            gate_mean = None
+            gate_tensor = sample_cfgs.get('gate')
+            if gate_tensor is not None:
+                gate_tensor = gate_tensor.to(device=tokens_mask.device, dtype=torch.float32).squeeze(-1)
+                gate_mask = tokens_mask.float()
+                gate_mean = (gate_tensor * gate_mask).sum() / (gate_mask.sum() + 1e-6)
+
             logging_output = {
                 'loss': reduced_loss.detach().cpu().item(),
                 'aatype_loss': aatype_reduced_loss.detach().cpu().item(),
@@ -404,7 +411,7 @@ class DiffFullAtomCriterion(FairseqCriterion):
                 'nsentences': batch_size,                        # int
                 'weight':weight.float().mean().item(),
                 'wy_recall': wy_recall.detach().cpu().item(),
-                'gate_mean': sample_cfgs.get('gate').mean().item() if sample_cfgs.get('gate') is not None else None,
+                'gate_mean': gate_mean.detach().cpu().item() if gate_mean is not None else None,
             }
             #使得reduced——loss张量的数据类型和logits一致
             reduced_loss = reduced_loss.type_as(logits)

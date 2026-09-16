@@ -2,7 +2,6 @@
 import math
 import os
 import re, sys
-import argparse
 from pathlib import Path
 from typing import List, Tuple
 import logging
@@ -105,7 +104,6 @@ def gather_simple_results(batch_size, iter_number = 20, root_dir = ''): #root_di
 
 
 def gather_results(root_dir):
-    root_dir = Path(root_dir)
 
     ########################################
     # 默认的文件路径是T_0.1_R_20_esm_refined_pdbtm以下就直接是pdbname的目录了，之后就会直接遍历拾取，不需要加别的配置，每次改一下路径和batchsize就行
@@ -160,37 +158,6 @@ def gather_results(root_dir):
 
     logging.info(f'CSV has been generated :{csv_path}')
 
-
-def iter_target_dirs(root_dir: Path, target_list_file: str = ""):
-    root_dir = Path(root_dir)
-    if target_list_file:
-        with open(target_list_file) as f:
-            for line in f:
-                target = line.strip()
-                if not target:
-                    continue
-                target = target[:-4] if target.endswith(".npy") else target
-                yield root_dir / target
-        return
-
-    for sub in sorted(root_dir.iterdir()):
-        if sub.is_dir():
-            yield sub
-
-
-def gather_all_targets(root_dir, batch_size, iter_number, target_list_file=""):
-    root_dir = Path(root_dir)
-    for target_dir in iter_target_dirs(root_dir, target_list_file):
-        if not target_dir.is_dir():
-            logging.warning(f"target dir missing: {target_dir}")
-            continue
-        merged_file = target_dir / f"{target_dir.name.lower()}_merged.fasta"
-        if merged_file.exists():
-            logging.info(f"merged fasta exists, skip: {merged_file}")
-            continue
-        gather_simple_results(batch_size=batch_size, iter_number=iter_number, root_dir=target_dir)
-    gather_results(root_dir)
-
 def gather_mpnn_results(root_dir):
     csv_rows = []
 
@@ -236,20 +203,6 @@ def gather_mpnn_results(root_dir):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--root-dir", required=True)
-    parser.add_argument("--target-list-file", default="")
-    parser.add_argument("--batch-size", type=int, default=10)
-    parser.add_argument("--iter-number", type=int, default=20)
-    parser.add_argument("--mode", choices=["all", "stats"], default="all")
-    args = parser.parse_args()
-
-    if args.mode == "stats":
-        gather_results(Path(args.root_dir))
-    else:
-        gather_all_targets(
-            root_dir=args.root_dir,
-            batch_size=args.batch_size,
-            iter_number=args.iter_number,
-            target_list_file=args.target_list_file,
-        )
+    base = Path('/home/chenty/public_data/third_cluster_data/abacust_design_results/seqs/T_0.1_R_20_esm_refined_zero_afdb_with_0223_cluster_dict_1_3_b48')
+    for ckpt in ['checkpoint260', 'checkpoint250', 'checkpoint255']:
+        gather_results(base / ckpt)

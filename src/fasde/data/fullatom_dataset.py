@@ -133,7 +133,7 @@ class FullAtomDataset(FairseqDataset):
         #     merged_cluster_dict_f = '/home/chenty/abacust_mem/src/fasde/data/pdbs/merged_cluster_dict.npy'
         # else:
         #     merged_cluster_dict_f = '/home/chenty/abacust_mem/src/fasde/data/pdbs/merged_cluster_dict.npy'
-        merged_cluster_dict_f = '/home/chenty/abacust_mem/src/data/data_storage/merged_cluster_dict.npy'
+        merged_cluster_dict_f = '/home/chenty/public_data/abacust_mem_data/data_storage/merged_cluster_dict.npy'
 
         self.pdbtm_file_path = pdbtm_file_path
         self.pdb_path = pdb_path

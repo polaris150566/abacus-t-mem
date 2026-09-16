@@ -123,9 +123,9 @@ def batch_convert(xml_root, json_root, npy_dir, n_jobs = 128):
     return results
 
 # if __name__ == '__main__':
-#     input_path = Path('/home/chenty/abacust_mem/src/data/data_storage/tmdet_result/xml')
-#     json_path  = Path('/home/chenty/abacust_mem/src/data/data_storage/tmdet_result/jsons')
-#     npy_path   = Path('/home/chenty/abacust_mem/src/data/data_storage/tmdet_result/npys')  # 后续 tensor 用
+#     input_path = Path('/home/chenty/public_data/abacust_mem_data/data_storage/tmdet_result/xml')
+#     json_path  = Path('/home/chenty/public_data/abacust_mem_data/data_storage/tmdet_result/jsons')
+#     npy_path   = Path('/home/chenty/public_data/abacust_mem_data/data_storage/tmdet_result/npys')  # 后续 tensor 用
 
 #     batch_convert(input_path, json_path,npy_path, n_jobs=32)
 

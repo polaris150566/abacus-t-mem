@@ -181,6 +181,6 @@ def gather_mpnn_results(root_dir):
 
 
 if __name__ == "__main__":
-    base = Path('/home/chenty/public_data/third_cluster_data/abacust_design_results/seqs/T_0.1_R_20_esm_refined_zero_afdb_with_0223_cluster_dict_1_3_b48')
+    base = Path('/home/chenty/public_data/third_cluster_data/abacust_design_results/seqs/T_0.1_R_20_esm_refined_zero_afdb_with_0124afdb_cluster_dict_1_3_b48')
     for ckpt in ['checkpoint260', 'checkpoint250', 'checkpoint255']:
         gather_results(base / ckpt)

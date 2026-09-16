@@ -27,9 +27,9 @@ SEED=42
 
 CONFIG_YAML="config.yaml"
 MAX_PROTEIN_SEQUENCE_LEN=256
-PDB_PATH="/home/chenty/abacust_mem/src/data/data_storage/assembled_pdbs/"
-PDBTM_PATH="/home/chenty/abacust_mem/src/data/data_storage/tmdet_result/npys/"
-NPY_PATH="/home/chenty/abacust_mem/src/data/data_storage/merged_npys/all_npy"
+PDB_PATH="/home/chenty/public_data/abacust_mem_data/data_storage/assembled_pdbs/"
+PDBTM_PATH="/home/chenty/public_data/abacust_mem_data/data_storage/tmdet_result/npys/"
+NPY_PATH="/home/chenty/public_data/abacust_mem_data/data_storage/merged_npys/all_npy"
 
 DIFF_T=40
 MAX_ITER_NUM=4

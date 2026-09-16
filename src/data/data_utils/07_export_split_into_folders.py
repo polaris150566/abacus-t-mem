@@ -28,8 +28,8 @@ def copy_files(files, destination_dir):
 
 def main():
     # JSON 文件路径
-    json_file = '/home/chenty/abacust_mem/src/data/data_storage/merged_cluster_dict.json'
-    source_dir = '/home/chenty/abacust_mem/src/data/data_storage/assembled_pdbs'
+    json_file = '/home/chenty/public_data/abacust_mem_data/data_storage/merged_cluster_dict.json'
+    source_dir = '/home/chenty/public_data/abacust_mem_data/data_storage/assembled_pdbs'
     destination_dir = '/home/chenty/public_data/third_cluster_data/source_data'
 
     # 加载 JSON 文件

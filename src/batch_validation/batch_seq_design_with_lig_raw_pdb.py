@@ -921,7 +921,7 @@ def main(args):
                         backbone_angles_sin_cos = batch['backbone_angles_sin_cos']
                         plip_anno_itype_list = batch['plip_anno_itype_list']
 
-                        pdbtm_data_path = '/home/chenty/abacust_mem/src/data/data_storage/tmdet_result/npys'
+                        pdbtm_data_path = '/home/chenty/public_data/abacust_mem_data/data_storage/tmdet_result/npys'
                         pdbtm_data_item = Pdbtm_parser._init_from_pdbname(pdb_name=data_name)
                         G = pdbtm_data_item._tmatrix
                         N = pdbtm_data_item._normal
