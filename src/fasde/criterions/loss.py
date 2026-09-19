@@ -295,12 +295,12 @@ class DiffFullAtomCriterion(FairseqCriterion):
                     dtype=torch.float32,
                     device=tokens_mask.device
                 )
-            tm_region_mask = tm_region_table[pdbtm_regions_mask] * tokens_mask#标记每一个未知是不是在跨膜区
-            nontm_region_mask = (1 - tm_region_table[pdbtm_regions_mask]) * tokens_mask
+            tm_region_mask = tm_region_table[pdbtm_regions_mask.long()] * tokens_mask#标记每一个未知是不是在跨膜区
+            nontm_region_mask = (1 - tm_region_table[pdbtm_regions_mask.long()]) * tokens_mask
             #######################################################################
             # regions的损失加权: 权重表来自 mem_config.region_loss_weights (未配置则全为 1.0)
             weight_table = self.region_loss_weight_table.to(tokens_mask.device)
-            region_weight = weight_table[pdbtm_regions_mask]  # (B, L)
+            region_weight = weight_table[pdbtm_regions_mask.long()]  # (B, L)
             ############################################################################
             #在膜水交界的地方设立权重
             # import pdb;pdb.set_trace()
@@ -505,5 +505,5 @@ if __name__ == "__main__":
         )
     print(weight_table)
     pdbtm_regions_mask = torch.tensor([2,2,2,2,2,2,3,3,3,3,3,4,4,4,4,4,4])
-    region_weight = weight_table[pdbtm_regions_mask]  # (B, L) #基于regions的权重，可以直接拿来用
+    region_weight = weight_table[pdbtm_regions_mask.long()]  # (B, L) #基于regions的权重，可以直接拿来用
     print(region_weight)
