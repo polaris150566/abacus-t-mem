@@ -150,9 +150,9 @@ logging.basicConfig(
 def main():
 
     checker = LeakChecker(
-        query_fasta="/home/chenty/abacust_mem/src/data/data_storage/query.fasta" ,
-        target_fasta="/home/chenty/abacust_mem/src/data/data_storage/target.fasta" ,
-        out_dir="/home/chenty/abacust_mem/src/data/data_storage/check_leakage/"
+        query_fasta="/home/chenty/public_data/abacust_mem_data/data_storage/query.fasta" ,
+        target_fasta="/home/chenty/public_data/abacust_mem_data/data_storage/target.fasta" ,
+        out_dir="/home/chenty/public_data/abacust_mem_data/data_storage/check_leakage/"
         )
     checker.run()
 

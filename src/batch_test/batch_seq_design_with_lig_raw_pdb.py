@@ -326,6 +326,17 @@ def get_args():
 def load_checkpoint(model, checkpoint_path):
     ckpt = torch.load(checkpoint_path, map_location='cpu')
     model.load_state_dict(ckpt['model'], strict=False)
+    has_gate_encoder_weights = any(
+        "mem_logit_gate_encoder_layers." in key for key in ckpt["model"]
+    )
+    abacust = getattr(getattr(model, "model", None), "abacust", None)
+    if (
+        abacust is not None
+        and getattr(abacust, "mem_logit_gate_modulation", False)
+        and getattr(abacust, "mem_logit_gate_encoder_layers", None) is not None
+        and not has_gate_encoder_weights
+    ):
+        abacust.initialize_mem_logit_gate_encoder_from_encoder()
     logger.info(f'checkpoint loaded: {checkpoint_path}')
     # return ckpt['last_optimizer_state']['state'][0]['step']
 
@@ -785,7 +796,7 @@ def main(args):
     device = torch.device(args.device)
     logger.info(f'Running on device: {device}')
     logger.info(f"[env] CUDA_VISIBLE_DEVICES = {os.environ.get('CUDA_VISIBLE_DEVICES')}")
-    physical_device_idx = log_gpu()
+    physical_device_idx = log_gpu() if device.type == "cuda" else -1  # CPU/无CUDA 时跳过, 避免 torch.cuda.current_device() 崩
     model = DiffFullAtom(args)
     load_checkpoint(model, args.checkpoint)
     model.to(device)

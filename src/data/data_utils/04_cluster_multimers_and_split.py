@@ -40,7 +40,7 @@ def filter_with_resolution_and_hydrophobic_width(
         hydrophobic_thres=(25, 40),
         resolution_cutoff=4,
         n_jobs=64,
-        pdb_dir='/home/chenty/abacust_mem/src/data/data_storage/assembled_pdbs'
+        pdb_dir='/home/chenty/public_data/abacust_mem_data/data_storage/assembled_pdbs'
 ):
     """
     与原函数完全兼容，只是内部并行加速。
@@ -258,7 +258,7 @@ class SequenceClusterer():
             return None
 
     def save_clusters_to_npy(self, clusters,
-        output_dir='/home/chenty/abacust_mem/src/data/data_storage/',
+        output_dir='/home/chenty/public_data/abacust_mem_data/data_storage/',
         filename="merged_cluster_dict" ):
         """保存至npy文件，使用pickle进行读取和书写，存储字典的结构:
             merged_cluster_dict = {
@@ -345,9 +345,9 @@ def recluster_pdbs_in_multiple_clusters(cluster_dict, cluster_scale_cutoff = 10)
 
 
 def run_sequence_clustering(
-    base_path='/home/chenty/abacust_mem/src/data/data_storage',                                                      #存放fasta文件和mmseq的地方
-    input_fasta_path='/home/chenty/abacust_mem/src/data/data_storage/sequence_for_cluster.fasta',                    #输入文件
-    output_dir='/home/chenty/abacust_mem/src/data/data_storage',                                                     #存放最终的npy文件的地方
+    base_path='/home/chenty/public_data/abacust_mem_data/data_storage',                                                      #存放fasta文件和mmseq的地方
+    input_fasta_path='/home/chenty/public_data/abacust_mem_data/data_storage/sequence_for_cluster.fasta',                    #输入文件
+    output_dir='/home/chenty/public_data/abacust_mem_data/data_storage',                                                     #存放最终的npy文件的地方
     output_file_name = "raw_cluster_dict",                                                                        #输出文件名称
     save_json=False,
     save_txt=False
@@ -389,7 +389,7 @@ def run_sequence_clustering(
         logging.warning("Clustering failed.")
         import pdb;pdb.set_trace()
 
-def check_pdbnames_with_leakage(input_path, tmp_dir = "/home/chenty/abacust_mem/src/data/data_storage/tmp", thres = 0.5, cov = 0.8):
+def check_pdbnames_with_leakage(input_path, tmp_dir = "/home/chenty/public_data/abacust_mem_data/data_storage/tmp", thres = 0.5, cov = 0.8):
     input_path = Path(input_path)
     tmp_dir = Path(tmp_dir)
 
@@ -410,7 +410,7 @@ def check_pdbnames_with_leakage(input_path, tmp_dir = "/home/chenty/abacust_mem/
     from joblib import Parallel, delayed
 
     def get_fasta_sequence_wrap(name, output_dir, num):
-        source_dir = Path('/home/chenty/abacust_mem/src/data/data_storage/fasta_download')
+        source_dir = Path('/home/chenty/public_data/abacust_mem_data/data_storage/fasta_download')
         name = name.lower()
         source_file = source_dir / f"{name}.fasta"
         output_path = Path(output_dir)
@@ -433,13 +433,13 @@ def check_pdbnames_with_leakage(input_path, tmp_dir = "/home/chenty/abacust_mem/
     Parallel(n_jobs=16)(delayed(get_fasta_sequence_wrap)(i, train_dir, 3) for i in tqdm(train_data))
     Parallel(n_jobs=16)(delayed(get_fasta_sequence_wrap)(i, valid_dir, 3) for i in tqdm(valid_data))
 
-    Protein_Sequence.fasta_utils.gather_all_fastas_from_dir(input_dir= train_dir, output_file_name="/home/chenty/abacust_mem/src/data/data_storage/target.fasta", header_rewrite_function = lambda h: h.replace('>', '').split('|')[0])
-    Protein_Sequence.fasta_utils.gather_all_fastas_from_dir(input_dir= valid_dir, output_file_name="/home/chenty/abacust_mem/src/data/data_storage/query.fasta", header_rewrite_function = lambda h: h.replace('>', '').split('|')[0])
-    from filter_leakage import LeakChecker
+    Protein_Sequence.fasta_utils.gather_all_fastas_from_dir(input_dir= train_dir, output_file_name="/home/chenty/public_data/abacust_mem_data/data_storage/target.fasta", header_rewrite_function = lambda h: h.replace('>', '').split('|')[0])
+    Protein_Sequence.fasta_utils.gather_all_fastas_from_dir(input_dir= valid_dir, output_file_name="/home/chenty/public_data/abacust_mem_data/data_storage/query.fasta", header_rewrite_function = lambda h: h.replace('>', '').split('|')[0])
+    from 06_filter_leakage import LeakChecker
     checker = LeakChecker(
-        query_fasta="/home/chenty/abacust_mem/src/data/data_storage/query.fasta" ,
-        target_fasta="/home/chenty/abacust_mem/src/data/data_storage/target.fasta" ,
-        out_dir="/home/chenty/abacust_mem/src/data/data_storage/check_leakage/"
+        query_fasta="/home/chenty/public_data/abacust_mem_data/data_storage/query.fasta" ,
+        target_fasta="/home/chenty/public_data/abacust_mem_data/data_storage/target.fasta" ,
+        out_dir="/home/chenty/public_data/abacust_mem_data/data_storage/check_leakage/"
         )
     return checker.run(identity = thres, cov = cov)
 
@@ -466,7 +466,7 @@ def cluster_multimers(input_fasta_dir,tmp_fasta_name, raw_cluster_result_path, o
         input_dir=input_fasta_dir,  output_file_name=tmp_fasta_name,  length_threshold=[20, 1024],  filter_repeat=20)     #这个阈值是ESM2的最大和最小
     clusters = run_sequence_clustering(
                             input_fasta_path=tmp_fasta_name,
-                            output_dir='/home/chenty/abacust_mem/src/data/data_storage',                                                     #存放最终的npy文件的地方
+                            output_dir='/home/chenty/public_data/abacust_mem_data/data_storage',                                                     #存放最终的npy文件的地方
                             output_file_name = "raw_cluster_dict",
                             save_json=True,
                             save_txt=True
@@ -503,7 +503,7 @@ def cluster_multimers(input_fasta_dir,tmp_fasta_name, raw_cluster_result_path, o
 
     logging.info(f"================  check_leakage ==============")
     np.save(output_dir / "filtered_cluster_dict.npy", split_result_with_valid_filtered)
-    report_csv_path = check_pdbnames_with_leakage(output_dir / "filtered_cluster_dict.npy", tmp_dir = "/home/chenty/abacust_mem/src/data/data_storage/tmp", thres = filter_identity, cov=filter_cov)
+    report_csv_path = check_pdbnames_with_leakage(output_dir / "filtered_cluster_dict.npy", tmp_dir = "/home/chenty/public_data/abacust_mem_data/data_storage/tmp", thres = filter_identity, cov=filter_cov)
 
     from file_utils import read_csv_to_dict, save_dict_as_json
 
@@ -526,10 +526,10 @@ def cluster_multimers(input_fasta_dir,tmp_fasta_name, raw_cluster_result_path, o
 
 if __name__ == "__main__":
     cluster_multimers(
-        input_fasta_dir = "/home/chenty/abacust_mem/src/data/data_storage/fasta_for_cluster",
-        tmp_fasta_name =  "/home/chenty/abacust_mem/src/data/data_storage/fasta_for_cluster.fasta",
-        raw_cluster_result_path = "/home/chenty/abacust_mem/src/data/data_storage/processed_raw_cluster_result.npy",
-        output_dir = "/home/chenty/abacust_mem/src/data/data_storage",
+        input_fasta_dir = "/home/chenty/public_data/abacust_mem_data/data_storage/fasta_for_cluster",
+        tmp_fasta_name =  "/home/chenty/public_data/abacust_mem_data/data_storage/fasta_for_cluster.fasta",
+        raw_cluster_result_path = "/home/chenty/public_data/abacust_mem_data/data_storage/processed_raw_cluster_result.npy",
+        output_dir = "/home/chenty/public_data/abacust_mem_data/data_storage",
         split_ratio = 0.85,
         filter_cov=0.8,
         filter_identity=0.5,

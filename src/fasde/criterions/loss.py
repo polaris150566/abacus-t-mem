@@ -125,12 +125,15 @@ class DiffFullAtomCriterion(FairseqCriterion):
         #     W: 2.0
         #     Y: 2.0
         aa_w = {}
+        region_w = {}
+        mem_cfg = {}
         mem_config_path = getattr(task.args, 'mem_config', '')
         if mem_config_path:
             import yaml
             with open(mem_config_path, 'r') as f:
-                mem_cfg = yaml.safe_load(f)
+                mem_cfg = yaml.safe_load(f) or {}
             aa_w = mem_cfg.get('aa_loss_weights', {}) or {}
+            region_w = mem_cfg.get('region_loss_weights', {}) or {}
 
         # 构建 per-AA loss 权重 tensor，按 restypes 索引（共24个token）
         # restypes = ['<unk>','<pad>','<cls>','<mask>','A','R','N','D','C','Q','E','G',
@@ -139,6 +142,23 @@ class DiffFullAtomCriterion(FairseqCriterion):
         self.register_buffer(
             "aa_loss_weight_table",
             torch.tensor(weight_vec, dtype=torch.float32)
+        )
+
+        # 跨膜区(膜位置)loss 权重: 从 mem_config 的 region_loss_weights 读取, 按 region code 索引
+        #   例:  region_loss_weights:
+        #          H: 1.5      # 跨膜螺旋
+        #          B: 1.5      # 跨膜 beta 桶
+        #          L: 1.5      # 再入环
+        #          default: 1.0
+        # 未配置该项时全部为 1.0, 与改动前行为完全一致
+        _rw_default = float(region_w.get('default', 1.0))
+        _rw_vec = [float(region_w.get(reverse_region_dict[i], _rw_default)) for i in range(len(region_dict))]
+        self.register_buffer(
+            "region_loss_weight_table",
+            torch.tensor(_rw_vec, dtype=torch.float32)
+        )
+        logger.info(
+            'region_loss_weights cfg=%s -> table(idx=region code)=%s' % (region_w, _rw_vec)
         )
 
 
@@ -269,24 +289,18 @@ class DiffFullAtomCriterion(FairseqCriterion):
 
             #######################################################################
             #计算跨膜区的掩码
-            tm_region_mask_template = {k: 1 if k in {'H','B',"F","R"} else 0 for k in region_dict.keys()}
+            tm_region_mask_template = {k: 1 if k in {'H','B','I','C','L'} else 0 for k in region_dict.keys()}
             tm_region_table = torch.tensor(
                     [ tm_region_mask_template[reverse_region_dict[i]] for i in range(len(region_dict))],
                     dtype=torch.float32,
                     device=tokens_mask.device
                 )
-            tm_region_mask = tm_region_table[pdbtm_regions_mask]#标记每一个未知是不是在跨膜区
-            nontm_region_mask = 1 - tm_region_mask
+            tm_region_mask = tm_region_table[pdbtm_regions_mask] * tokens_mask#标记每一个未知是不是在跨膜区
+            nontm_region_mask = (1 - tm_region_table[pdbtm_regions_mask]) * tokens_mask
             #######################################################################
-            # regions的损失加权
-            char2weight = {k: 1 if k in {'H','B',"F",'R'} else 1.0 for k in region_dict.keys()}
-            # 2. 把映射表转成 tensor，方便一次性索引，假设字符的整数编码就是 region_dict 的值（0~9）
-            weight_table = torch.tensor(
-                    [char2weight[reverse_region_dict[i]] for i in range(len(region_dict))],
-                    dtype=torch.float32,
-                    device=tokens_mask.device
-                )
-            region_weight = weight_table[pdbtm_regions_mask]  # (B, L) #基于regions的权重，可以直接拿来用
+            # regions的损失加权: 权重表来自 mem_config.region_loss_weights (未配置则全为 1.0)
+            weight_table = self.region_loss_weight_table.to(tokens_mask.device)
+            region_weight = weight_table[pdbtm_regions_mask]  # (B, L)
             ############################################################################
             #在膜水交界的地方设立权重
             # import pdb;pdb.set_trace()
@@ -389,6 +403,13 @@ class DiffFullAtomCriterion(FairseqCriterion):
                 print(f"raw_loss: {raw_loss}")
 
             #
+            gate_mean = None
+            gate_tensor = sample_cfgs.get('gate')
+            if gate_tensor is not None:
+                gate_tensor = gate_tensor.to(device=tokens_mask.device, dtype=torch.float32).squeeze(-1)
+                gate_mask = tokens_mask.float()
+                gate_mean = (gate_tensor * gate_mask).sum() / (gate_mask.sum() + 1e-6)
+
             logging_output = {
                 'loss': reduced_loss.detach().cpu().item(),
                 'aatype_loss': aatype_reduced_loss.detach().cpu().item(),
@@ -404,7 +425,7 @@ class DiffFullAtomCriterion(FairseqCriterion):
                 'nsentences': batch_size,                        # int
                 'weight':weight.float().mean().item(),
                 'wy_recall': wy_recall.detach().cpu().item(),
-                'gate_mean': sample_cfgs.get('gate').mean().item() if sample_cfgs.get('gate') is not None else None,
+                'gate_mean': gate_mean.detach().cpu().item() if gate_mean is not None else None,
             }
             #使得reduced——loss张量的数据类型和logits一致
             reduced_loss = reduced_loss.type_as(logits)

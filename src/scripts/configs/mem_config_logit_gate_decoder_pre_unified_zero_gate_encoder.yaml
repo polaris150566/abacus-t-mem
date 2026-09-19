@@ -1,6 +1,9 @@
 # ============================================================
-# mem_logit_modulation 专用配置
-# 主干全freeze，仅 NormalEncoder + mem_logit_bias 可训练
+# Gate-only membrane fine-tuning with zeroed gate encoder output.
+# In ABACUST.forward(...) and ABACUST.nar_sample(...), the tensor
+# mem_logit_gate_h_V / mem_logit_gate_h_V_init is set to zeros before
+# concatenating with mem_logit_y_emb. The main encoder_layers output is
+# unchanged.
 # ============================================================
 
 membrane_inject:
@@ -19,7 +22,9 @@ membrane_inject:
 cfg:
   enabled: false
 
-mem_logit_modulation: true
+mem_logit_modulation: false
+mem_logit_gate_modulation: true
+mem_logit_gate_zero_encoder: true
 
 freeze:
   - features
@@ -41,7 +46,8 @@ freeze:
   - unimol_repr_activate
   - lig_plip_itype_embedding
   - lig_encoder
+  - mem_net
 
 aa_loss_weights:
   W: 2.0
-  Y: 2.0
+  Y: 1.5

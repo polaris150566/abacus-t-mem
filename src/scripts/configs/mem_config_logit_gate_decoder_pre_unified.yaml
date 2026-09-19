@@ -1,6 +1,18 @@
 # ============================================================
-# mem_logit_modulation 专用配置
-# 主干全freeze，仅 NormalEncoder + mem_logit_bias 可训练
+# Gate-only membrane fine-tuning.
+# Gate uses mem_logit_gate_encoder_layers output.
+# mem_logit_gate_encoder_layers is copied from encoder_layers at init/load time.
+# Original encoder_layers stays frozen; mem_logit_gate_encoder_layers is trainable.
+# Membrane condition uses unified y_emb:
+#   z-offset RBF(20) -> 32,
+#   CA-to-virtual-CB theta [sin, cos] -> 32,
+#   region embedding -> 64,
+#   concat -> 128.
+# Trainable modules:
+#   mem_logit_gate_encoder_layers
+#   mem_logit_normal_encoder
+#   mem_logit_gate
+#   mem_logit_distribution_projection
 # ============================================================
 
 membrane_inject:
@@ -19,7 +31,8 @@ membrane_inject:
 cfg:
   enabled: false
 
-mem_logit_modulation: true
+mem_logit_modulation: false
+mem_logit_gate_modulation: true
 
 freeze:
   - features
@@ -41,7 +54,8 @@ freeze:
   - unimol_repr_activate
   - lig_plip_itype_embedding
   - lig_encoder
+  - mem_net
 
 aa_loss_weights:
   W: 2.0
-  Y: 2.0
+  Y: 1.5

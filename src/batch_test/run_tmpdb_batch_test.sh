@@ -15,28 +15,28 @@ CLUSTER_CENTERS_TXT="${DATA_ROOT}/data_storage/cluster_centers.txt"
 SELECTION_MODE="values"
 LIMIT=""
 
-OUT_ROOT="${DATA_ROOT}/abacust_design_result/original_output"
-RUN_LIST_DIR="${OUT_ROOT}/run_lists"
-FEATURE_OUT_DIR="${OUT_ROOT}/npys"
+OUT_ROOT="${DATA_ROOT}/abacust_design_result/memedge16_test"
+RUN_LIST_DIR="${DATA_ROOT}/abacust_design_result/original_output/run_lists"
+FEATURE_OUT_DIR="${DATA_ROOT}/abacust_design_result/original_output/npys"
 SEQ_OUT_DIR="${OUT_ROOT}/seqs"
 
 PDB_PATH_LIST="${RUN_LIST_DIR}/pdb_paths.txt"
 TARGET_ID_LIST="${RUN_LIST_DIR}/target_ids.txt"
 
 CHECKPOINTS=(
-  /home/chenty/abacust_mem/src/experiments/abacust_mem_zero_with_0124_cluster_dict_b64_lr25/checkpoint/checkpoint70.pt
+  /home/chenty/abacust_mem/src/experiments/abacust_mem_zero_afdb_with_0124afdb_cluster_dict_1_3_memedge16/checkpoints/checkpoint57.pt
 )
 
 TM_RAWS=(
-  zero_with_0124_cluster_dict_b64_lr25
+  zero_afdb_with_0124afdb_cluster_dict_1_3_memedge16
 )
 
 DEVICE_LISTS=(
-  1
+  1,2,3,4,5,6
 )
 
 MEM_CONFIGS=(
-  ""
+  "/home/chenty/abacust_mem/src/scripts/configs/mem_config_memedge16.yaml"
 )
 
 CFG_SCALES=(
@@ -172,9 +172,9 @@ run_gather_step() {
 
 main() {
   # run_prepare_step
-  # run_feature_step
+  run_feature_step
   run_sample_step
-  # run_gather_step
+  run_gather_step
 }
 
 main

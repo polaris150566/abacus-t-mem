@@ -23,7 +23,7 @@ logging.basicConfig(
 
 # 示例用法
 if __name__ == '__main__':
-    input_dir =    '/home/chenty/abacust_mem/src/data/data_storage/tmdet_result/jsons' # 替换为实际文件路径
-    save_csv_dir = '/home/chenty/abacust_mem/src/data/data_storage' # 保存 CSV 的目录
+    input_dir =    '/home/chenty/public_data/abacust_mem_data/data_storage/tmdet_result/jsons' # 替换为实际文件路径
+    save_csv_dir = '/home/chenty/public_data/abacust_mem_data/data_storage' # 保存 CSV 的目录
 
     Pdbtm_parser.batch_analyse_tm_width(input_dir=input_dir, save_csv_dir=save_csv_dir, n=32)

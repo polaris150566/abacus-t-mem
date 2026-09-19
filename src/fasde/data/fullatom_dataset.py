@@ -133,18 +133,14 @@ class FullAtomDataset(FairseqDataset):
         #     merged_cluster_dict_f = '/home/chenty/abacust_mem/src/fasde/data/pdbs/merged_cluster_dict.npy'
         # else:
         #     merged_cluster_dict_f = '/home/chenty/abacust_mem/src/fasde/data/pdbs/merged_cluster_dict.npy'
-        merged_cluster_dict_f = '/home/chenty/abacust_mem/src/data/data_storage/merged_cluster_dict.npy'
+        merged_cluster_dict_f = '/home/chenty/public_data/abacust_mem_data/data_storage/merged_cluster_dict.npy'
 
         self.pdbtm_file_path = pdbtm_file_path
         self.pdb_path = pdb_path
         self.npy_path = npy_path
 
         assert split in ['train', 'valid'], f"Invalid split value: {split}. Expected 'train' or 'valid'."
-        try:
-            self.split = split if split is not None else 'train'
-        except Exception as e:
-            import traceback;traceback.print_exc()
-            import pdb;pdb.set_trace()
+        self.split = split if split is not None else 'train'
 
 
         self.merged_cluster_dict = np.load(merged_cluster_dict_f, allow_pickle=True).item()
@@ -771,18 +767,8 @@ class FullAtomDataset(FairseqDataset):
 
             if strict_mode == True:
                 if not self.check_align(features):
-                    logger.warning("lig_prot_features not align!")
-                    # print(features["pdbtm_regions"])
-                    # print(features["residx"])
-                    # print(features["tokens"])
-                    print(len(features["pdbtm_regions"]))
-                    print(len(features["residx"]))
-                    print(pdbcode)
-                    print(pdbtm_item.extract_full_seq_str(insert_code=""))
-                    from protein_utils.fasta_utils import Protein_Sequence
-                    residx_show = Protein_Sequence.transfer_numform_sequence_to_str(features["tokens"]-4)
-                    print(residx_show)
-                    import pdb;pdb.set_trace()
+                    logger.warning(f"lig_prot_features not align for {pdbcode}, skip sample")
+                    return None
 
             char2weight = {k: 1 if k in {'H','B','I','C','L'} else 0 for k in region_dict.keys()}
             # 2. 把映射表转成 tensor，方便一次性索引，假设字符的整数编码就是 region_dict 的值（0~9）
@@ -875,9 +861,9 @@ class FullAtomDataset(FairseqDataset):
             else:
                 try:
                     batch[k] = pad_and_stack([s[k] for s in samples], batch_first=True, value=0)
-                except Exception as e:
+                except Exception:
                     traceback.print_exc()
-                    import pdb;pdb.set_trace()
+                    raise
         return batch
 
 
@@ -1090,8 +1076,9 @@ def crop_dict(lig_prot_features, threshold, eccentricity = 0.5, std_dev=15):
         try:
             try:
                 rotation_matrix = lig_prot_features['tmatrix'][:3, :3].numpy()
-            except Exception as e:
-                import pdb;pdb.set_trace()
+            except Exception:
+                traceback.print_exc()
+                return None
             diagonal_matrix = np.diag([1, 1, 1/eccentricity])
             affine_matrix = np.dot(np.linalg.inv(diagonal_matrix), rotation_matrix)
             indices = Ellipsoid_crop.crop_and_search_return_idx(points, affine_matrix, threshold, std_dev)
@@ -1113,10 +1100,8 @@ def crop_dict(lig_prot_features, threshold, eccentricity = 0.5, std_dev=15):
                     # logger.info(f"keys {k} not mentioned!")
                     # lig_prot_features[k] = lig_prot_features[k][indices]
 
-        except Exception as e:
+        except Exception:
             traceback.print_exc()
-            print(f"裁剪过程中发生错误: {e}")
-            import pdb;pdb.set_trace()
             return None
 
     # 按照 chain 和 idx 进行排序
@@ -1310,15 +1295,8 @@ class MixedPDBAFDBDataset(FullAtomDataset):
 
 
             if not self.check_align(features):
-                logger.warning("lig_prot_features not align!")
-                print(len(features["pdbtm_regions"]))
-                print(len(features["residx"]))
-                print(pdbcode)
-                print(pdbtm_item.extract_full_seq_str(insert_code=""))
-                from protein_utils.fasta_utils import Protein_Sequence
-                residx_show = Protein_Sequence.transfer_numform_sequence_to_str(features["tokens"]-4)
-                print(residx_show)
-                import pdb;pdb.set_trace()
+                logger.warning(f"lig_prot_features not align for {pdbcode}, skip sample")
+                return None
 
             char2weight = {k: 1 if k in {'H','B','I','C','L'} else 0 for k in region_dict.keys()}
             # 2. 把映射表转成 tensor，方便一次性索引，假设字符的整数编码就是 region_dict 的值（0~9）
@@ -1438,9 +1416,9 @@ class MixedPDBAFDBDataset(FullAtomDataset):
             else:
                 try:
                     batch[k] = pad_and_stack([s[k] for s in samples], batch_first=True, value=0)
-                except Exception as e:
+                except Exception:
                     traceback.print_exc()
-                    import pdb;pdb.set_trace()
+                    raise
         # import ipdb; ipdb.set_trace()
         return batch
 
