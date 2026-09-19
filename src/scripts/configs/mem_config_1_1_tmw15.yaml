@@ -10,7 +10,7 @@ membrane_inject:
   mem_net_concat: {enabled: false}
   adaln:          {enabled: false}
   cross_attn:     {enabled: false}
-  mem_edge_concat:{enabled: false}
+  mem_edge_concat: {enabled: false}
 
 cfg:
   enabled: false
