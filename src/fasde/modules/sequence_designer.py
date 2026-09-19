@@ -382,12 +382,16 @@ class ABACUSTDesigner(nn.Module):
 
         prot_mask = (torch.all(torch.stack([(1-merged_lig_mask), merged_mask], -1), -1)).float()
         output_scores_mask = (merged_s * (1 - prot_mask)) == 0
-        cur_timestep = uniform_sampling_t(self.T, B, device).long()# 一列最大时t01的随机变量
-
-        if (np.random.rand() < 0.5):
-        # if True:
+        if not self.training:
+            # 验证时时间步固定为0: 全遮罩、从头设计、无上一轮ESM上下文,
+            # 消除随机时间步带来的valid指标波动
+            cur_timestep = torch.zeros((B,), dtype=torch.long, device=device)
+            last_iter_S_embed = torch.zeros((B, L, 1280)).to(device)
+        elif (np.random.rand() < 0.5):
+            cur_timestep = uniform_sampling_t(self.T, B, device).long()
             last_iter_S_embed = torch.zeros((B, L, 1280)).to(device)
         else:
+            cur_timestep = uniform_sampling_t(self.T, B, device).long()
             with torch.no_grad():
                 last_timestep = torch.where(cur_timestep.float() > 0, cur_timestep - 1, 0).long()
                 last_iter_null_embed = torch.zeros((B, L, 1280)).to(device)

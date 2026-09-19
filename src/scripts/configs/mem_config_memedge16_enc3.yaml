@@ -1,0 +1,48 @@
+# ============================================================
+# mem_edge concat 微调配置 (encoder 3 层解冻版)
+#   = mem_config_memedge16.yaml + freeze.keep 里加入 encoder_layers
+#   = PIfold (prot_encoder_pifold / aux_scEnc) 仍然冻结
+#   - 膜(深度 RBF20 + 角度 sin/cos)过基础MLP -> 16维, 广播 concat 到 decoder 边 h_ESV 后面
+#   - freeze: 只训练 膜信息模块 / decoder / ESM相关投影 / W_out, 其余全冻
+#   - 不开 cfg / adaln / cross_attn / mem_net / logit-gate
+# ============================================================
+
+membrane_inject:
+  mem_net_add:
+    enabled: false
+
+  mem_net_concat:
+    enabled: false
+
+  adaln:
+    enabled: false
+
+  cross_attn:
+    enabled: false
+
+  # 本次新增: 膜边特征注入
+  mem_edge_concat:
+    enabled: true
+    dim: 16
+
+cfg:
+  enabled: false
+
+mem_logit_modulation: false
+mem_logit_gate_modulation: false
+
+# freeze: 白名单模式, 只训练 keep 里的顶层模块, 其余全部冻结
+freeze:
+  mode: all_except
+  keep:
+    - mem_net            # 膜信息模块(本配置下未构建, 列出无害)
+    - mem_edge_encoder   # 膜信息模块(本次新增)
+    - encoder_layers      # 本次唯一改动: 解冻 encoder 的 3 层 GVP EncLayer
+    - decoder_layers     # decoder
+    - W_esm_LN           # ESM 相关投影
+    - W_esm_act          # ESM 相关投影
+    - W_out              # 输出头
+
+aa_loss_weights:
+  W: 2.0
+  Y: 2.0

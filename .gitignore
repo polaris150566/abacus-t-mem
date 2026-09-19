@@ -61,3 +61,9 @@ auxiliary_test/
 # OS
 .DS_Store
 Thumbs.db
+
+# ---- 迁移用: 放行代码/脚本/配置, 供其它机器 git clone 后可直接训练 ----
+!src/scripts/*.sh
+!src/scripts/configs/*.yaml
+!src/config.yaml
+*.bak_tmw

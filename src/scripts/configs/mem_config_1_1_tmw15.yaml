@@ -1,0 +1,32 @@
+# ============================================================
+# AFDB 1:1 + 跨膜区(膜位置) loss 加权 1.5
+#   - 数据配比与 afdb_1_1 完全一致 (--pdb_ratio 0.5)
+#   - 模型结构与 afdb_1_1 完全一致: 无任何膜信息注入模块, 全量微调
+#   - 唯一差别: 跨膜区残基的 loss 乘 1.5
+# ============================================================
+
+membrane_inject:
+  mem_net_add:    {enabled: false}
+  mem_net_concat: {enabled: false}
+  adaln:          {enabled: false}
+  cross_attn:     {enabled: false}
+  mem_edge_concat:{enabled: false}
+
+cfg:
+  enabled: false
+
+mem_logit_modulation: false
+mem_logit_gate_modulation: false
+
+# 全量微调 (空列表 = 不冻结)
+freeze: []
+
+# 跨膜区 loss 权重 (region code -> 权重)
+#   可用 code: 1,2 (膜两侧) H (跨膜螺旋) B (跨膜beta桶) F (界面螺旋)
+#              L (再入环) N (桶内) 3 (周质) P,R (假阳/假阴) U (未知)
+#   这里只给"膜内"三类加权, 与 valid 的 tm_aatype_acc 口径 ({H,B,I,C,L}) 保持一致
+region_loss_weights:
+  H: 1.5
+  B: 1.5
+  L: 1.5
+  default: 1.0
