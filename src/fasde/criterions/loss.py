@@ -304,7 +304,7 @@ class DiffFullAtomCriterion(FairseqCriterion):
             ############################################################################
             #在膜水交界的地方设立权重
             # import pdb;pdb.set_trace()
-            edge_mem_weight = torch.where(edge_mem_mask == 1, torch.tensor(1).cuda(), torch.tensor(1.0).cuda()).float()
+            edge_mem_weight = torch.where(edge_mem_mask == 1, torch.tensor(1.0).cuda(), torch.tensor(1.0).cuda()).float()
 
             # print(edge_mem_weight)
             # print(final_weight)
