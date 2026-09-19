@@ -776,7 +776,7 @@ class FullAtomDataset(FairseqDataset):
                     [char2weight[reverse_region_dict[i]] for i in range(len(region_dict))],
                     dtype=torch.float32
                 )
-            tm_region_mask = weight_table[features['pdbtm_regions']]
+            tm_region_mask = weight_table[features['pdbtm_regions'].long()]
             # import pdb;pdb.set_trace()
             boundary_mask_left = (tm_region_mask.long()[2:] != tm_region_mask.long()[:-2])  # 左侧交界
             boundary_mask_right = (tm_region_mask.long()[:-2] != tm_region_mask.long()[2:])  # 右侧交界
@@ -1304,7 +1304,7 @@ class MixedPDBAFDBDataset(FullAtomDataset):
                     [char2weight[reverse_region_dict[i]] for i in range(len(region_dict))],
                     dtype=torch.float32
                 )
-            tm_region_mask = weight_table[features['pdbtm_regions']]
+            tm_region_mask = weight_table[features['pdbtm_regions'].long()]
             boundary_mask_left = (tm_region_mask.long()[2:] != tm_region_mask.long()[:-2])  # 左侧交界
             boundary_mask_right = (tm_region_mask.long()[:-2] != tm_region_mask.long()[2:])  # 右侧交界
 
