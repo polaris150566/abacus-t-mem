@@ -257,7 +257,10 @@ class ABACUSTDesigner(nn.Module):
         self.T = int(total_time_step)
 
         if args.pretrained_mpnn_ckpt:
-            state = torch.load(args.pretrained_mpnn_ckpt_f, map_location='cpu', weights_only=False)
+            try:
+                state = torch.load(args.pretrained_mpnn_ckpt_f, map_location='cpu', weights_only=False)
+            except TypeError:  # torch < 1.13 不支持 weights_only 参数
+                state = torch.load(args.pretrained_mpnn_ckpt_f, map_location='cpu')
             model_weights = state["model"]
             model_weights = {k.replace('model.abacust.', ''): v for k, v in model_weights.items() \
                 if (k.startswith('model.abacust.') ) }
